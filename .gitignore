@@ -1,0 +1,65 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / local tooling
+.idea/
+.vscode/
+.cursor/
+
+# --- This repo: generated or heavy local artifacts (see Scripts/config.py) ---
+
+# Local DB / vector index files (any path)
+*.sqlite3
+*.duckdb
+
+# Chroma persistent vector stores (rebuild via embeddings_chromadb / build_chunk_indices)
+Data/chroma_db/
+Data/chroma_db_sample/
+Data/chroma_chunk_*/
+
+# Large dataset exports (regenerate via data_extraction_load / chunking; GitHub blocks files >100MB)
+Data/train.jsonl
+Data/chunks_*.jsonl
+
+# Grid eval checkpoint + CSV outputs (Scripts/eval/run_grid_eval.py; use git add -f to archive)
+Data/eval/
+
+# Optional single-file chunk dump used by the main pipeline (CHUNKS_JSONL)
+Data/chunks.jsonl
+
+# Logs (if you add file logging under the repo)
+*.log

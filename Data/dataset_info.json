@@ -1,0 +1,8 @@
+{
+  "dataset": "coastalcph/multi_eurlex",
+  "language": "en",
+  "label_level": "level_1",
+  "splits": {
+    "train": 55000
+  }
+}

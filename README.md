@@ -1,0 +1,347 @@
+# TFM -- MultiEURLEX RAG Evaluation
+
+Python pipeline to download English EU-law documents from [MultiEURLEX](https://huggingface.co/datasets/coastalcph/multi_eurlex), chunk them with **10 strategies**, embed each into its own **Chroma** vector database (via Ollama), generate **ground-truth** evaluation questions with an LLM, and score **retrieval strategies** (dense, BM25, hybrid, with optional cross-encoder reranking).
+
+---
+
+## How to run -- exact commands, step by step
+
+> **All commands run from the project root (`TFM/`).** The steps must be executed **in order**.
+>
+> **What you are building:**
+>
+>
+> | Concept                | Count   | What it is                                                      |
+> | ---------------------- | ------- | --------------------------------------------------------------- |
+> | Chunk databases        | **10**  | One Chroma vector DB per chunking strategy                      |
+> | Ground-truth questions | **100** | LLM-generated questions from indexed documents                  |
+> | Retrieval strategies   | **10**  | Dense, BM25, and hybrid retrievers (base set, no cross-encoder) |
+>
+>
+> **Grid size:** 10 chunk strategies x 10 retrievers x 100 questions = **10 000 retrieval evaluations**.
+> The output CSV has **100 rows** (one per chunk-strategy x retriever combination), each showing hit rate and MRR aggregated over the 100 questions.
+
+---
+
+### Step 0 -- One-time prerequisites
+
+```bash
+# 1. Pull the two Ollama models
+ollama pull qwen3-embedding:4b    # embedding model
+ollama pull llama3.2               # LLM for ground-truth generation
+
+# 2. Only if Data/train.jsonl does NOT exist yet (first time):
+export HF_TOKEN=your_huggingface_token
+```
+
+---
+
+### Step 1 -- Download the dataset
+
+Downloads MultiEURLEX and writes `Data/train.jsonl` (1 000 English documents). **Skips automatically** if the file already exists.
+
+```bash
+python -m Scripts.data_extraction_load
+```
+
+**Creates:** `Data/train.jsonl`, `Data/dataset_info.json`
+
+---
+
+### Step 2 -- Build the 10 chunk databases
+
+Chunks every document with 10 different strategies, writes one JSONL per strategy, then embeds each into its own Chroma directory via Ollama. **This is the slowest step.**
+
+```bash
+python -m Scripts.eval.build_chunk_indices --all
+```
+
+**Creates (10 of each):**
+
+
+| File / directory                 | Example                                                  |
+| -------------------------------- | -------------------------------------------------------- |
+| `Data/chunks_<strategy>.jsonl`   | `Data/chunks_len_500_o50.jsonl`                          |
+| `Data/chroma_chunk_<strategy>/`  | `Data/chroma_chunk_len_500_o50/`                         |
+| `Data/eval_corpus_manifest.json` | One shared file listing which CELEX doc IDs are in scope |
+
+
+The **10 chunking strategy IDs** are:
+
+```
+len_500_o50  len_1000_o100  len_1500_o150  len_2000_o0  len_2000_o200
+para_nn_merge  line_n_merge  char_nn_only  rec_nn_priority  rec_legal_markers
+```
+
+**Resume behavior:** already-completed strategies are auto-skipped. Add `--force` to rebuild from scratch.
+
+> **Quick-test variant** -- only use the first N documents (much faster, useful for verifying the pipeline works):
+>
+> ```bash
+> python -m Scripts.eval.build_chunk_indices --all --limit 50
+> ```
+>
+> If you change `--limit` later, you **must re-run Step 3** because the corpus scope changed.
+
+---
+
+### Step 3 -- Generate 100 ground-truth questions
+
+The LLM (`llama3.2` via Ollama) reads snippets from the indexed documents and writes one evaluation question per snippet. `--n 100` means 100 accepted questions.
+
+```bash
+python -m Scripts.eval.ground_truth_generate --n 100
+```
+
+**Requires:** `Data/eval_corpus_manifest.json` from Step 2 (questions only reference documents that are actually in the databases).
+
+**Creates:** `Data/ground_truth.jsonl` -- 100 rows, each containing `question`, `gold_snippet`, and `reference` (CELEX ID).
+
+---
+
+### Step 4 -- Run the 10 x 10 evaluation grid
+
+Run 10 base retrieval strategies against each of the 10 chunk databases, scoring every ground-truth question. Pass the 10 base retriever IDs with `--retrievers` to **skip** the cross-encoder reranked variants (which need GPU and are much slower):
+
+```bash
+python -m Scripts.eval.run_grid_eval \
+  --retrievers \
+    dense_sim_k10 \
+    dense_mmr_k10 \
+    bm25_k10 \
+    hyb_rrf_k60 \
+    hyb_rrf_k30 \
+    hyb_rrf_fetch40 \
+    hyb_weighted_norm \
+    hyb_weighted_dense_70 \
+    hyb_interleave \
+    hyb_fill_dense_then_bm25
+```
+
+**Creates (in `Data/eval/`):**
+
+
+| File                      | Content                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `results_summary.csv`     | **100 rows** (10 chunk strategies x 10 retrievers): hit rate, MRR, rank stats   |
+| `rank_breakdown_long.csv` | Per-query rank detail (10 000 rows: 100 combos x 100 questions)                 |
+| `hit_rate_pivot.csv`      | Pivot table: chunk strategies as rows, retrievers as columns, cells = hit rates |
+
+
+**Resume / checkpoint:** Progress is saved after **every ground-truth query** to `Data/eval/eval_grid_checkpoint.json` (atomic write). If you stop with Ctrl+C, kill the process, or the machine crashes, re-run the **same** command (same ground-truth file, `--limit-queries`, `--chunk-strategies`, `--retrievers`). The run continues where it left off. If you change any of those inputs or edit `ground_truth.jsonl`, delete the checkpoint or pass `--no-resume` to start over. CSV reports are written only when the full grid finishes.
+
+**Memory:** The eval loop loads one Chroma index per chunk strategy, then discards it (`gc.collect()`, Chroma cache release). BM25 needs the full `chunks_<strategy>.jsonl` in RAM for that strategy. For each chunk strategy, **all non–cross-encoder retrievers run first**, then cross-encoder `*_ce_r50` cells; the reranker is **unloaded from GPU** after those cells so the next strategy does not keep the model resident. Optional: set `EVAL_CUDA_EMPTY_CACHE=1` to call `torch.cuda.empty_cache()` after each strategy when using GPU rerankers. If you still hit CUDA OOM during rerank forward passes, lower `RERANK_PREDICT_BATCH_SIZE` (default `32`) or use a smaller `RERANK_MODEL`.
+
+---
+
+### Cheat sheet -- copy-paste the full pipeline
+
+```bash
+# Step 1: dataset
+python -m Scripts.data_extraction_load
+
+# Step 2: 10 chunk databases (chunk + embed)
+python -m Scripts.eval.build_chunk_indices --all
+
+# Step 3: 100 ground-truth questions
+python -m Scripts.eval.ground_truth_generate --n 100
+
+# Step 4: 10x10 eval grid on those 100 questions
+python -m Scripts.eval.run_grid_eval \
+  --retrievers dense_sim_k10 dense_mmr_k10 bm25_k10 \
+    hyb_rrf_k60 hyb_rrf_k30 hyb_rrf_fetch40 \
+    hyb_weighted_norm hyb_weighted_dense_70 \
+    hyb_interleave hyb_fill_dense_then_bm25
+```
+
+### Smoke test -- quick verification with tiny corpus
+
+```bash
+python -m Scripts.eval.build_chunk_indices --all --limit 10
+python -m Scripts.eval.ground_truth_generate --n 10
+python -m Scripts.eval.run_grid_eval --limit-queries 10 \
+  --retrievers dense_sim_k10 bm25_k10 hyb_rrf_k60
+```
+
+### Full 10 x 20 grid (includes cross-encoder reranking, needs GPU)
+
+To also test the 10 `*_ce_r50` cross-encoder reranked variants (20 retrievers total, 200 rows in summary):
+
+```bash
+python -m Scripts.eval.run_grid_eval
+```
+
+---
+
+### Optional: interactive RAG (not part of the eval grid)
+
+```bash
+python -m Scripts.main --prompt "Your question" --limit 50
+python run_api.py   # or: python -m Scripts.api
+```
+
+---
+
+## Prerequisites
+
+
+| Requirement                | Notes                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Conda env**              | Create one and install deps: `pip install -r requirements.txt` (installs `sentence-transformers` and PyTorch for eval reranking)     |
+| **Ollama**                 | Pull embedding + chat models: see Step 0 above                                                                                       |
+| **GPU (optional)**         | Recommended for the full 10x20 eval with default reranker `BAAI/bge-reranker-v2-m3`; CPU works but is slower                         |
+| `**HF_TOKEN`**             | Hugging Face token (env var). **Do not commit tokens.** Only needed to download the dataset tarball if `Data/train.jsonl` is missing |
+| `**Data/categories.json`** | EuroVOC id-to-labels map (needed for `preprocess_for_rag`)                                                                           |
+
+
+Default models in config (adjust if you use others):
+
+- Embeddings: `qwen3-embedding:4b` -- `ollama pull qwen3-embedding:4b`
+- LLM (GT questions + RAG answers): `llama3.2` -- `ollama pull llama3.2`
+
+### Embedding vector size (dimensions)
+
+`Scripts/config.py` sets `EMBEDDING_DIMENSIONS = 2560`, passed to Ollama's `/api/embed` as the `dimensions` field (Matryoshka / truncated width).
+
+For `qwen3-embedding:4b` on current Ollama, the native maximum is 2560: requesting a larger `dimensions` still yields length 2560. Smaller values truncate the vector (cheaper index, less detail). `None` would omit `dimensions` and use the server default (still 2560 for this model).
+
+---
+
+## Corpus manifest contract
+
+`Data/eval_corpus_manifest.json` lists the CELEX IDs of every document loaded when you ran `build_chunk_indices` (same scope as `train.jsonl` + optional `--limit`).
+
+1. `**build_chunk_indices`** writes this file **after** loading the dataframe, **before** chunking.
+2. `**ground_truth_generate`** **requires** the manifest and only samples documents whose `celex_id` is in the list.
+3. `**run_grid_eval`** **requires** the manifest and aborts if any GT `reference` CELEX is missing (no silent all-zero eval from scope drift).
+
+If you change `--limit`, re-run chunk index build (Step 2), then regenerate `ground_truth.jsonl` (Step 3).
+
+---
+
+## Directory map
+
+
+| Path                                    | Role                                                            |
+| --------------------------------------- | --------------------------------------------------------------- |
+| `Data/train.jsonl`                      | English docs (celex_id, text, labels)                           |
+| `Data/categories.json`                  | EuroVOC labels for `preprocess_for_rag`                         |
+| `Data/eval_corpus_manifest.json`        | Eval corpus scope (CELEX list from last `build_chunk_indices`)  |
+| `Data/chunks_<strategy>.jsonl`          | Chunks for BM25 + chunk_uid alignment                           |
+| `Data/chroma_chunk_<strategy>/`         | Chroma persistence per chunking strategy                        |
+| `Data/ground_truth.jsonl`               | Eval queries + gold snippet + reference CELEX                   |
+| `Data/eval/*.csv`                       | Grid eval outputs                                               |
+| `Scripts/config.py`                     | Paths, model names, collection name                             |
+| `Scripts/data_extraction_load.py`       | HF download -> `train.jsonl`                                    |
+| `Scripts/preprocess.py`                 | Adds `labels_en` from categories                                |
+| `Scripts/chunking.py`                   | Single-strategy chunking for `main`/legacy                      |
+| `Scripts/chunking_strategies.py`        | **10** eval chunking strategies                                 |
+| `Scripts/embeddings_chromadb.py`        | Ollama embed -> Chroma                                          |
+| `Scripts/retriever.py`                  | Dense retrieve + RAG answer                                     |
+| `Scripts/main.py`                       | End-to-end demo pipeline                                        |
+| `Scripts/api.py`                        | FastAPI `/chat`                                                 |
+| `Scripts/eval/build_chunk_indices.py`   | Chunk all strategies, embed, resume-safe                        |
+| `Scripts/eval/ground_truth_generate.py` | LLM questions from in-corpus snippets                           |
+| `Scripts/eval/retrieval_strategies.py`  | **20** retrievers: 10 baselines + 10 `*_ce_r50` rerank variants |
+| `Scripts/eval/rerank_cross_encoder.py`  | Cross-encoder rerank (`RERANK_MODEL` in config)                 |
+| `Scripts/eval/metrics.py`               | Hit rate, MRR, rank buckets                                     |
+| `Scripts/eval/run_grid_eval.py`         | Full grid + CSV outputs                                         |
+
+
+---
+
+## CLI entry points
+
+
+| Command                                                                  | Purpose                                                |
+| ------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `python -m Scripts.data_extraction_load`                                 | Ensure `train.jsonl` exists (download if needed)       |
+| `python -m Scripts.preprocess`                                           | Smoke-test preprocess (loads data via extraction main) |
+| `python -m Scripts.eval.build_chunk_indices --all`                       | Build all strategies (+ manifest)                      |
+| `python -m Scripts.eval.build_chunk_indices --only-strategy len_2000_o0` | Single strategy                                        |
+| `python -m Scripts.eval.build_chunk_indices --all --force`               | Full rebuild JSONL + Chroma (no skip)                  |
+| `python -m Scripts.eval.ground_truth_generate --n 100`                   | Write `ground_truth.jsonl` (100 questions)             |
+| `python -m Scripts.eval.run_grid_eval`                                   | Run grid; writes `Data/eval/*.csv`                     |
+| `python -m Scripts.eval.run_grid_eval --limit-queries 100`               | Use first 100 rows of GT (if file has more)            |
+| `python -m Scripts.main`                                                 | RAG answer one prompt                                  |
+| `python -m Scripts.api`                                                  | Start API server                                       |
+| `python -m Scripts.embeddings_chromadb`                                  | Dev: chunk + embed default Chroma                      |
+| `python -m Scripts.chunking`                                             | Dev: default chunker -> `chunks.jsonl`                 |
+
+
+Common flags:
+
+- `**build_chunk_indices`**: `--limit N`, `--force`, `--all`, `--only-strategy <id>`
+- `**ground_truth_generate`**: `--n`, `--seed`, `--min-doc-chars`, `--snippet-min-chars`, `--snippet-max-chars`, `--manifest`, `--out`
+- `**run_grid_eval`**: `--ground-truth`, `--out`, `--manifest`, `--retrievers`, `--chunk-strategies`, `--limit-queries`, `--no-resume`, `--checkpoint`
+
+---
+
+## Troubleshooting
+
+### All hit rates are 0.0
+
+Usually **GT CELEX IDs are not in the indexed corpus**. Fix:
+
+1. Run `build_chunk_indices` with the intended `--limit` (or full corpus).
+2. Regenerate GT: `python -m Scripts.eval.ground_truth_generate --n 100`
+3. Run `run_grid_eval` again.
+
+If GT still references docs outside the manifest, eval **exits with an error** listing missing CELEX IDs.
+
+### `Missing eval_corpus_manifest.json`
+
+Run `build_chunk_indices` at least once for your current `train.jsonl` scope. GT generation and eval both require the manifest.
+
+### Resume vs `--force`
+
+- **Default (no `--force`)**: For each strategy, if `chunks_<id>.jsonl` line count equals Chroma collection count, that strategy is **skipped**. If embedding stopped early, the run **resumes** from the existing vector count. Regenerating the JSONL for a strategy **clears** that strategy's Chroma so vectors stay aligned with chunk IDs.
+- `**--force`**: Deletes strategy Chroma dirs and rebuilds JSONL + embeddings for selected strategies.
+
+### Memory (large corpora)
+
+- **Chunking**: `build_chunk_indices` writes each strategy's JSONL **incrementally** (per document), so the full chunk list is never held in RAM.
+- **Embedding**: Vectors are built by **streaming** the JSONL in `EMBEDDING_BATCH_SIZE` batches; Chroma is flushed every `CHROMA_WRITE_THRESHOLD` rows (512), each flush in `CHROMA_ADD_SUBBATCH_SIZE` (128) slices with retries to avoid HNSW compaction errors.
+- The pipeline loads the full preprocessed dataframe once for all strategies; use `--limit` or `--only-strategy` to lower that footprint. After each strategy, `gc.collect()` runs.
+
+### Embedding context / chunk size
+
+All eval strategies cap segments at **2000 characters** (with recursive splits for oversized pieces). `char_nn_only` post-splits any `CharacterTextSplitter` overflow so nothing exceeds the cap.
+
+### Hugging Face download fails
+
+Set `export HF_TOKEN=...` and ensure you accept the dataset terms on Hugging Face if required.
+
+### Reranker model download or OOM
+
+The default `BAAI/bge-reranker-v2-m3` is downloaded from Hugging Face on first eval use. If you run out of memory, set a lighter model:
+
+```bash
+export RERANK_MODEL=BAAI/bge-reranker-base
+# or
+export RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+```
+
+Optional: `export RETRIEVAL_CANDIDATE_K=40` to reduce candidate pool size.
+
+### Chroma `InternalError` / HNSW compaction during `build_chunk_indices`
+
+If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) ensure you are on a recent `chromadb`; (2) delete the `Data/chroma_chunk_<strategy>/` directory for the failing strategy and **resume** (JSONL is kept; only Chroma is rebuilt). The embedder uses small sub-batches and retries to reduce this class of failure.
+
+---
+
+## Environment variables
+
+
+| Variable                   | Used for                                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `HF_TOKEN`                 | `huggingface_hub` download in `data_extraction_load`                                               |
+| `RERANK_MODEL`             | Cross-encoder checkpoint ID (default: `BAAI/bge-reranker-v2-m3`)                                   |
+| `RERANK_DEVICE`            | `cpu` or `cuda` / `cuda:0` to pin the reranker; if unset, tries CUDA then falls back to CPU on OOM |
+| `RERANK_PREDICT_BATCH_SIZE` | Batch size for cross-encoder `predict` (default `32`; lower reduces peak VRAM during rerank)      |
+| `RETRIEVAL_CANDIDATE_K`    | First-stage pool size before rerank (default `50`)                                                 |
+| `RERANK_PASSAGE_MAX_CHARS` | Truncate chunk text passed to the reranker (default `8000`)                                        |
+| `EVAL_CUDA_EMPTY_CACHE`    | Set to `1` / `true` to call `torch.cuda.empty_cache()` after each chunk strategy in the eval grid |
+
+
+Model names stay in `Scripts/config.py` (no secrets).

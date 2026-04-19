@@ -1,0 +1,17 @@
+huggingface_hub
+pandas
+scikit-learn
+tqdm
+langchain
+langchain-core
+langchain-community
+langchain-chroma
+langchain-text-splitters
+langchain-ollama
+chromadb
+rank_bm25
+sentence-transformers
+ollama
+fastapi
+uvicorn
+pydantic
