@@ -113,41 +113,19 @@ def expand_with_neighbors(
     by_uid: dict[str, Document],
     index: NeighborIndex,
     offsets: tuple[int, ...] = (-2, -1, 1, 2),
-    *,
-    neighbor_seed_top: int | None = None,
 ) -> list[Document]:
-    """
-    Append neighbor chunks by CELEX order for each retrieved doc.
-
-    If ``neighbor_seed_top`` is set, only the first N documents in ``docs`` get
-    neighbor expansion (all ``docs`` are still kept in order first).
-    If ``None``, every document gets inline neighbor expansion (legacy behavior).
-    """
     out: list[Document] = []
-
-    def _neighbors_for_doc(d: Document) -> list[Document]:
-        extra: list[Document] = []
+    for d in docs:
+        out.append(d)
         uid = str((d.metadata or {}).get("chunk_uid") or "")
         loc = index.locate(uid)
         if not loc:
-            return extra
+            continue
         celex, pos = loc
         for off in offsets:
             nuid = index.uid_at(celex, pos + off)
             if nuid and nuid in by_uid:
-                extra.append(by_uid[nuid])
-        return extra
-
-    if neighbor_seed_top is None:
-        for d in docs:
-            out.append(d)
-            out.extend(_neighbors_for_doc(d))
-    else:
-        n = max(0, int(neighbor_seed_top))
-        for d in docs:
-            out.append(d)
-        for d in docs[:n]:
-            out.extend(_neighbors_for_doc(d))
+                out.append(by_uid[nuid])
     return dedupe_preserve_order(out)
 
 

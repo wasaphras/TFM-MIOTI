@@ -1,4 +1,4 @@
-"""Eval 1: baseline retrieval at k=20 (pruned pair grid; see pairs.SELECTED_PAIRS_EVAL1)."""
+"""Eval 1: baseline retrieval at k=20; pair 10 stays base hyb_interleave (no CE rerank)."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def main() -> None:
         nargs="+",
         default=None,
         metavar="chunk:retriever",
-        help="Subset of pairs (default: SELECTED_PAIRS_EVAL1)",
+        help="Subset of pairs (default: 10 from image)",
     )
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--checkpoint", type=Path, default=None)

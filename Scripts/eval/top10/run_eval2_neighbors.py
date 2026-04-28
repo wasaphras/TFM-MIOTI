@@ -1,4 +1,4 @@
-"""Eval 2: base retrieve -> neighbor expansion (configurable offsets / seed top) -> dedupe -> CE rerank."""
+"""Eval 2: base retrieve -> +/-2 neighbor chunks -> dedupe -> CE rerank top 20."""
 
 from __future__ import annotations
 
@@ -18,14 +18,6 @@ from .retrieval_k20 import finalize_from_candidates, run_base_retriever_k
 EVAL_ID = "eval2_neighbors"
 DEFAULT_OUT = config.DATA_DIR / "eval_top10" / "eval2_neighbors"
 DEFAULT_PREFETCH_DIR = config.DATA_DIR / "eval_top10" / "prefetch"
-
-
-def _parse_neighbor_offsets(spec: str) -> tuple[int, ...]:
-    spec = spec.replace(" ", "")
-    parts = [p for p in spec.split(",") if p != ""]
-    if not parts:
-        raise SystemExit("neighbor-offsets must be comma-separated ints, e.g. -2,-1,1,2")
-    return tuple(int(p) for p in parts)
 
 
 def _pairs_eval234(specs: list[str] | None) -> tuple[tuple[str, str], ...]:
@@ -55,26 +47,11 @@ def main() -> None:
     p.add_argument("--prefetch-write", action="store_true")
     p.add_argument("--prefetch-read", action="store_true")
     p.add_argument("--no-resume-prefetch", action="store_true")
-    p.add_argument(
-        "--neighbor-offsets",
-        type=str,
-        default="-2,-1,1,2",
-        help="Comma-separated neighbor offsets within same CELEX (default -2,-1,1,2)",
-    )
-    p.add_argument(
-        "--neighbor-seed-top",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Only expand neighbors for the top-N retrieved docs (None = all seeds, legacy).",
-    )
     args = p.parse_args()
 
     pairs = _pairs_eval234(args.pairs)
     final_k = args.final_k
     candidate_k = args.candidate_k
-    neighbor_offsets = _parse_neighbor_offsets(args.neighbor_offsets)
-    neighbor_seed_top = args.neighbor_seed_top
 
     idx_cache: dict[str, NeighborIndex] = {}
 
@@ -90,13 +67,7 @@ def main() -> None:
         if ctx.documents is None:
             raise RuntimeError("Eval2 requires BM25-capable context (chunks loaded)")
         by_uid = ctx.chunk_uid_map()
-        expanded = expand_with_neighbors(
-            raw,
-            by_uid,
-            nidx,
-            neighbor_offsets,
-            neighbor_seed_top=neighbor_seed_top,
-        )
+        expanded = expand_with_neighbors(raw, by_uid, nidx)
         del raw
         from ..rerank_cross_encoder import rerank_documents
 
@@ -119,13 +90,7 @@ def main() -> None:
         if ctx.documents is None:
             raise RuntimeError("Eval2 requires BM25-capable context (chunks loaded)")
         by_uid = ctx.chunk_uid_map()
-        expanded = expand_with_neighbors(
-            raw,
-            by_uid,
-            nidx,
-            neighbor_offsets,
-            neighbor_seed_top=neighbor_seed_top,
-        )
+        expanded = expand_with_neighbors(raw, by_uid, nidx)
         del raw
         return {
             "query": q,
@@ -152,10 +117,7 @@ def main() -> None:
         final_k=final_k,
         candidate_k=candidate_k,
         retrieve_docs=retrieve_docs,
-        extra_meta={
-            "neighbor_offsets": list(neighbor_offsets),
-            "neighbor_seed_top": neighbor_seed_top,
-        },
+        extra_meta={"neighbor_offsets": [-2, -1, 1, 2]},
         prefetch_root=args.prefetch_dir,
         prefetch_write=args.prefetch_write,
         prefetch_read=args.prefetch_read,

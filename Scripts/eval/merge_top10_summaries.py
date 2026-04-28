@@ -1,8 +1,20 @@
 """Merge per-eval results_summary.csv from the four top-10 evals into one CSV.
 
-Each run writes ``<out>/results_summary.csv`` (chunk_strategy, retriever, hit_rate, mrr,
-optional hit_at_* columns, n). This script concatenates the four files with ``eval_id``
-and ``eval_label`` columns.
+The top-10 pipeline (``Scripts.eval.top10``) has four methods:
+
+1. **eval1_baseline** — baseline retrieval at k=20 (pair 10: no CE rerank on interleave).
+2. **eval2_neighbors** — same with graph neighbor expansion.
+3. **eval3_enhanced** — LLM-rewritten question per chunk strategy + CE at k=20.
+4. **eval4_multiquery** — enhanced + variant queries, multi retrieval, union, dedupe, rerank.
+
+Each run writes ``<out>/results_summary.csv`` (chunk_strategy, retriever, hit_rate, mrr, n).
+This script concatenates the four files with ``eval_id`` and ``eval_label`` columns.
+
+Default input layout::
+
+    Data/eval_top10/eval1_baseline/results_summary.csv
+    Data/eval_top10/eval2_neighbors/results_summary.csv
+    …
 
 Default output::
 
@@ -17,6 +29,7 @@ from pathlib import Path
 
 from .. import config
 
+# eval_id -> (subdir under --root, short label for the merged CSV)
 EVALS: tuple[tuple[str, str, str], ...] = (
     ("eval1_baseline", "eval1_baseline", "baseline_k20"),
     ("eval2_neighbors", "eval2_neighbors", "neighbors"),
@@ -43,39 +56,43 @@ def main() -> None:
     root = Path(args.root)
     out_path = Path(args.out) if args.out else root / "results_summary_all_evals.csv"
 
-    sources: list[tuple[str, str, Path]] = []
-    for eval_id, subdir, label in EVALS:
-        src = root / subdir / "results_summary.csv"
-        if src.is_file():
-            sources.append((eval_id, label, src))
-        else:
-            print(f"Skip (missing): {src}")
-
-    header = ["eval_id", "eval_label"]
-    for _, _, src in sources:
-        with open(src, newline="", encoding="utf-8") as fin:
-            dr = csv.DictReader(fin)
-            for c in dr.fieldnames or []:
-                if c not in header:
-                    header.append(c)
-
-    all_rows: list[dict[str, str]] = []
-    for eval_id, label, src in sources:
-        with open(src, newline="", encoding="utf-8") as fin:
-            dr = csv.DictReader(fin)
-            for row in dr:
-                rec: dict[str, str] = {"eval_id": eval_id, "eval_label": label}
-                rec.update({k: row.get(k, "") for k in dr.fieldnames or []})
-                all_rows.append(rec)
-        print(f"Merged {src} ({eval_id})")
-
+    fieldnames = [
+        "eval_id",
+        "eval_label",
+        "chunk_strategy",
+        "retriever",
+        "hit_rate",
+        "mrr",
+        "n",
+    ]
+    rows_written = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as fout:
-        w = csv.DictWriter(fout, fieldnames=header, extrasaction="ignore")
+        w = csv.DictWriter(fout, fieldnames=fieldnames)
         w.writeheader()
-        w.writerows(all_rows)
+        for eval_id, subdir, label in EVALS:
+            src = root / subdir / "results_summary.csv"
+            if not src.is_file():
+                print(f"Skip (missing): {src}")
+                continue
+            with open(src, newline="", encoding="utf-8") as fin:
+                r = csv.DictReader(fin)
+                for row in r:
+                    w.writerow(
+                        {
+                            "eval_id": eval_id,
+                            "eval_label": label,
+                            "chunk_strategy": row.get("chunk_strategy", ""),
+                            "retriever": row.get("retriever", ""),
+                            "hit_rate": row.get("hit_rate", ""),
+                            "mrr": row.get("mrr", ""),
+                            "n": row.get("n", ""),
+                        }
+                    )
+                    rows_written += 1
+            print(f"Merged {src} ({eval_id})")
 
-    print(f"Wrote {out_path} ({len(all_rows)} rows)")
+    print(f"Wrote {out_path} ({rows_written} rows)")
 
 
 if __name__ == "__main__":

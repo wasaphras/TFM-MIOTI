@@ -1,4 +1,4 @@
-"""Eval 4: multi-query retrieval (original + enhanced + variants by default), union, dedupe, CE rerank with original Q."""
+"""Eval 4: enhanced + 2 variants, 3 independent retrievals, union, dedupe, rerank with original Q."""
 
 from __future__ import annotations
 
@@ -46,11 +46,6 @@ def main() -> None:
         default=80,
         help="Candidate breadth per sub-query before union",
     )
-    p.add_argument(
-        "--no-original-in-retrieval",
-        action="store_true",
-        help="Legacy: retrieve only from LLM enhanced + two variants (omit original question).",
-    )
     p.add_argument("--pairs", nargs="+", default=None, metavar="chunk:retriever")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--no-resume", action="store_true")
@@ -78,12 +73,7 @@ def main() -> None:
         q0 = str(row["question"])
         base = base_retriever_id(rid)
         pool: list[Document] = []
-        subqs = (
-            [mq["enhanced_question"], mq["variants"][0], mq["variants"][1]]
-            if args.no_original_in_retrieval
-            else [q0, mq["enhanced_question"], mq["variants"][0], mq["variants"][1]]
-        )
-        for q in subqs:
+        for q in (mq["enhanced_question"], mq["variants"][0], mq["variants"][1]):
             batch = run_base_retriever_k(base, ctx, q, candidate_k=pqk)
             pool.extend(batch)
             del batch
@@ -106,12 +96,7 @@ def main() -> None:
         q0 = str(row["question"])
         base = base_retriever_id(rid)
         pool: list[Document] = []
-        subqs = (
-            [mq["enhanced_question"], mq["variants"][0], mq["variants"][1]]
-            if args.no_original_in_retrieval
-            else [q0, mq["enhanced_question"], mq["variants"][0], mq["variants"][1]]
-        )
-        for q in subqs:
+        for q in (mq["enhanced_question"], mq["variants"][0], mq["variants"][1]):
             batch = run_base_retriever_k(base, ctx, q, candidate_k=pqk)
             pool.extend(batch)
             del batch
@@ -142,10 +127,7 @@ def main() -> None:
         final_k=final_k,
         candidate_k=pqk,
         retrieve_docs=retrieve_docs,
-        extra_meta={
-            "multiquery_candidate_k": pqk,
-            "include_original_query": not args.no_original_in_retrieval,
-        },
+        extra_meta={"multiquery_candidate_k": pqk},
         prefetch_root=args.prefetch_dir,
         prefetch_write=args.prefetch_write,
         prefetch_read=args.prefetch_read,

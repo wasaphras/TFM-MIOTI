@@ -162,36 +162,14 @@ python -m Scripts.eval.run_grid_eval \
 
 ### Step 5 -- Top-10 four-eval pipeline (k=20, 100 GT questions)
 
-This is a **separate** experiment from the default grid in Step 4. It runs a **pruned** set of `(chunk_strategy, retriever)` pairs (see `Scripts/eval/top10/pairs.py` → `SELECTED_PAIRS_EVAL1`) on **`Data/ground_truth.jsonl`** with **final list length 20**, metrics **Hit@3/5/10/20** + MRR in `results_summary.csv`, buckets **1–20 + miss**, and **`per_query_ranks.csv`** (one row per query × cell for rank movement analysis).
+This is a **separate** experiment from the default grid in Step 4. It runs **10 hand-picked** `(chunk_strategy, retriever)` pairs on **`Data/ground_truth.jsonl`** (100 questions) with **final list length 20** and metrics buckets **1–20 + miss**.
 
 | Eval | Script | Idea |
 | ---- | ------ | ---- |
-| **1** | `Scripts.eval.top10.run_eval1_baseline` | Baseline: dedupe, retrieve/rerank to top 20. All pairs use `*_ce_r50` in the default grid. |
-| **2** | `Scripts.eval.top10.run_eval2_neighbors` | Base retrieve → **neighbor** expansion (default offsets `-2,-1,1,2`; override with `--neighbor-offsets`; limit which seeds get neighbors with `--neighbor-seed-top N`) → dedupe → cross-encoder rerank → 20. |
-| **3** | `Scripts.eval.top10.run_eval3_enhanced` | LLM rewrites each **original question** into a longer formal EU-law question; retrieve with the enhanced text; rerank → 20. |
-| **4** | `Scripts.eval.top10.run_eval4_multiquery` | Enhanced + **2 variants**; base retrieval runs for **original question first**, then enhanced + variants (default), **union**, dedupe, cross-encoder rerank with the **original** question → 20. Pass `--no-original-in-retrieval` for the legacy 3-query-only pool. |
-
-**Tuning helpers** (after a full or partial eval has written `results_summary.csv`):
-
-```bash
-# Dry-run commands for candidate_k × baseline vs neighbors; add --execute to run
-python -m Scripts.eval.top10.run_tuning_sweeps candidate
-python -m Scripts.eval.top10.run_tuning_sweeps neighbor
-
-# Compare per-query ranks between two eval output directories
-python -m Scripts.eval.top10.report_rank_comparison \
-  Data/eval_top10/eval1_baseline Data/eval_top10/eval2_neighbors \
-  --label-a baseline --label-b neighbors --out Data/eval_top10/rank_delta.csv
-
-# Oracle: where does gold appear? (small --limit-queries recommended)
-python -m Scripts.eval.top10.diagnose_oracle --limit-queries 20
-```
-
-Merge summaries (includes new `hit_at_*` columns when present):
-
-```bash
-python -m Scripts.eval.merge_top10_summaries
-```
+| **1** | `Scripts.eval.top10.run_eval1_baseline` | Baseline: dedupe, then retrieve/rerank to top 20. The last pair uses **base** `hyb_interleave` only (no cross-encoder); all others use `*_ce_r50`. |
+| **2** | `Scripts.eval.top10.run_eval2_neighbors` | Base retrieve (breadth 100) → expand each hit with **±1, ±2** neighbor chunks in the same CELEX (sidecar index) → dedupe → cross-encoder rerank → 20. **All 10** pairs use `*_ce_r50` (including upgraded `hyb_interleave_ce_r50`). |
+| **3** | `Scripts.eval.top10.run_eval3_enhanced` | LLM rewrites each **original question** (gold snippet **not** shown) into a longer formal EU-law question; retrieve with the enhanced text; dedupe; rerank → 20. |
+| **4** | `Scripts.eval.top10.run_eval4_multiquery` | From the enhanced question, the LLM emits **2 variants**; run base retrieval **independently** for enhanced + 2 variants (`--per-query-candidate-k` default **80**), **union**, dedupe by `chunk_uid`, cross-encoder rerank using the **original** question → 20. |
 
 **One-time index / stats** (after Step 2, before evals):
 
@@ -204,7 +182,7 @@ python -m Scripts.eval.top10.neighbor_index --strategies \
 
 **Outputs** (gitignored by default):
 
-- `Data/eval_top10/eval1_baseline/`, `eval2_neighbors/`, `eval3_enhanced/`, `eval4_multiquery/` — each with `results_summary.csv` (one row per pair; includes **hit_at_3**, **hit_at_5**, **hit_at_10**, **hit_at_20** when `final_k` ≥ 20), `per_query_ranks.csv`, `rank_breakdown_long.csv`, `hit_rate_pivot.csv`, and `checkpoint.json` while incomplete.
+- `Data/eval_top10/eval1_baseline/`, `eval2_neighbors/`, `eval3_enhanced/`, `eval4_multiquery/` — each with `results_summary.csv` (10 rows), `rank_breakdown_long.csv` (10 × 100 rank buckets), `hit_rate_pivot.csv`, and `checkpoint.json` while incomplete.
 - `Data/enhanced_questions/<strategy>.jsonl` (+ optional `.checkpoint.json`)
 - `Data/multi_query_questions/<strategy>.jsonl` (+ optional `.checkpoint.json`)
 - `Data/neighbor_index/<strategy>.pkl`

@@ -100,12 +100,7 @@ def _meta_matches(loaded: dict[str, Any], current: dict[str, Any]) -> bool:
         if loaded.get(k) != current.get(k):
             return False
     # optional extra keys in current must match if present in loaded
-    for k in (
-        "neighbor_offsets",
-        "neighbor_seed_top",
-        "multiquery_candidate_k",
-        "include_original_query",
-    ):
+    for k in ("neighbor_offsets", "multiquery_candidate_k"):
         if k in current and loaded.get(k) != current.get(k):
             return False
     return True
@@ -281,14 +276,7 @@ def _run_prefetch_read_only(
 
     from ._results import write_csvs
 
-    write_csvs(
-        out_dir,
-        pairs,
-        completed,
-        max_rank=final_k,
-        ground_truth_path=Path(meta["ground_truth"]),
-        limit_queries=meta.get("limit_queries"),
-    )
+    write_csvs(out_dir, pairs, completed, max_rank=final_k)
     if ck_path.is_file():
         ck_path.unlink()
         print(f"Removed checkpoint (complete): {ck_path}")
@@ -361,12 +349,7 @@ def run_checkpointed_eval(
         resume = False
         if ck_path.is_file():
             ck_path.unlink()
-        for name in (
-            "results_summary.csv",
-            "rank_breakdown_long.csv",
-            "hit_rate_pivot.csv",
-            "per_query_ranks.csv",
-        ):
+        for name in ("results_summary.csv", "rank_breakdown_long.csv", "hit_rate_pivot.csv"):
             p = out_dir / name
             if p.is_file():
                 p.unlink()
@@ -663,14 +646,7 @@ def run_checkpointed_eval(
 
     from ._results import write_csvs
 
-    write_csvs(
-        out_dir,
-        pairs,
-        completed,
-        max_rank=final_k,
-        ground_truth_path=Path(ground_truth_path),
-        limit_queries=limit_queries,
-    )
+    write_csvs(out_dir, pairs, completed, max_rank=final_k)
     if ck_path.is_file():
         ck_path.unlink()
         print(f"Removed checkpoint (complete): {ck_path}")
