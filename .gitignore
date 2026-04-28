@@ -53,6 +53,7 @@ Data/chroma_chunk_*/
 
 # Large dataset exports (regenerate via data_extraction_load / chunking; GitHub blocks files >100MB)
 Data/train.jsonl
+Data/train_dedup.jsonl
 Data/chunks_*.jsonl
 
 # Grid eval checkpoint + CSV outputs (Scripts/eval/run_grid_eval.py; use git add -f to archive)
