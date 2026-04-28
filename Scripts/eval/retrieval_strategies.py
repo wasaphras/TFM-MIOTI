@@ -1,6 +1,9 @@
 """
 Retriever variants for eval: dense, BM25, hybrid. Final list length k=10.
-Optional *_ce_r50: retrieve RETRIEVAL_CANDIDATE_K candidates, cross-encode rerank, keep top 10.
+
+There are **10 base** retriever IDs (`RETRIEVER_IDS_BASE`) plus the same bases
+with the ``_ce_r50`` suffix (**20** total in ``RETRIEVER_IDS``): retrieve
+``RETRIEVAL_CANDIDATE_K`` candidates, cross-encode rerank, keep top 10.
 """
 
 from __future__ import annotations
@@ -104,6 +107,23 @@ class RetrievalContext:
         self.documents = documents
         self._tok: list[list[str]] | None = None
         self._bm25: BM25Okapi | None = None
+        self._chunk_uid_index: dict[str, Document] | None = None
+
+    def chunk_uid_map(self) -> dict[str, Document]:
+        """
+        Map chunk_uid -> Document for the loaded corpus. Built once per context (O(n) in corpus size);
+        do not rebuild on every query — that caused multi-GB RSS growth on million-chunk strategies.
+        """
+        if self.documents is None:
+            return {}
+        if self._chunk_uid_index is None:
+            m: dict[str, Document] = {}
+            for d in self.documents:
+                uid = str((d.metadata or {}).get("chunk_uid") or "")
+                if uid:
+                    m[uid] = d
+            self._chunk_uid_index = m
+        return self._chunk_uid_index
 
     def _ensure_bm25(self) -> None:
         if self.documents is None:

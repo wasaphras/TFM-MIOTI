@@ -8,10 +8,16 @@ snippet against all 10 chunk strategies on the source document.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
+import os
+import pickle
 import random
 import re
+import signal
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from langchain_core.messages import HumanMessage
@@ -25,6 +31,58 @@ from .metrics import normalize_text
 
 # Smallest eval chunk target (~len_500_o50); snippet must fit in one chunk.
 _SNIPPET_HARD_CAP = 480
+
+CHECKPOINT_VERSION = 1
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
+
+
+def _default_checkpoint_path(out_path: Path) -> Path:
+    return out_path.with_name(out_path.name + ".checkpoint.json")
+
+
+def _count_jsonl_lines(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    n = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                n += 1
+    return n
+
+
+def _append_jsonl_record(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _serialize_rng(rng: random.Random) -> str:
+    return base64.b64encode(pickle.dumps(rng.getstate(), protocol=4)).decode("ascii")
+
+
+def _deserialize_rng(data_b64: str, rng: random.Random) -> None:
+    rng.setstate(pickle.loads(base64.b64decode(data_b64.encode("ascii"))))
 
 
 def _snap_sentence_start(text: str, start: int, max_back: int = 120) -> int:
@@ -174,10 +232,34 @@ def generate_ground_truth(
     manifest_path: Path,
     snippet_min_chars: int,
     snippet_max_chars: int,
+    *,
+    resume: bool = True,
+    no_resume: bool = False,
+    checkpoint_path: Path | None = None,
+    verbose: bool = False,
 ) -> None:
-    """Sample snippets only from documents listed in the eval corpus manifest (same scope as indices)."""
-    rng = random.Random(seed)
-    manifest_path = Path(manifest_path)
+    """Sample snippets only from documents listed in the eval corpus manifest (same scope as indices).
+
+    Each accepted row is appended to ``out_path`` immediately (fsync). A JSON checkpoint stores the
+    shuffled document order, RNG state, and the next index in that order after **every** document
+    tried, so stopping and re-running the same command resumes without redoing accepted rows.
+
+    Set ``no_resume=True`` to delete partial ``out_path`` and its checkpoint and start over.
+    """
+    out_path = Path(out_path).resolve()
+    manifest_path = Path(manifest_path).resolve()
+    ckpt_path = Path(checkpoint_path) if checkpoint_path else _default_checkpoint_path(out_path)
+    train_path = Path(config.TRAIN_JSONL).resolve()
+
+    if no_resume:
+        resume = False
+        if ckpt_path.is_file():
+            ckpt_path.unlink()
+            print(f"Removed checkpoint (--no-resume): {ckpt_path}")
+        if out_path.is_file():
+            out_path.unlink()
+            print(f"Removed partial output (--no-resume): {out_path}")
+
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"Missing {manifest_path}. Run first:\n"
@@ -191,9 +273,11 @@ def generate_ground_truth(
     if not allowed:
         raise ValueError(f"{manifest_path} has no celex_ids; rebuild indices.")
 
-    train_path = config.TRAIN_JSONL
     if not train_path.exists():
         raise FileNotFoundError(f"Missing {train_path}")
+
+    manifest_sha256 = _sha256_file(manifest_path)
+    train_st = train_path.stat()
 
     df = pd.read_json(train_path, lines=True)
     df["celex_id"] = df["celex_id"].apply(lambda x: str(x or ""))
@@ -205,66 +289,216 @@ def generate_ground_truth(
         )
 
     df = preprocess_for_rag(df)
+    n_df = len(df)
+
+    run_meta = {
+        "out_path": str(out_path),
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "train_path": str(train_path),
+        "train_stat": {"size": train_st.st_size, "mtime": int(train_st.st_mtime)},
+        "n_df_rows": n_df,
+        "seed": seed,
+        "n_target": n_target,
+        "min_doc_chars": min_doc_chars,
+        "snippet_min_chars": snippet_min_chars,
+        "snippet_max_chars": snippet_max_chars,
+    }
 
     llm = ChatOllama(model=config.LLM_MODEL, temperature=0.1)
 
-    out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    accepted: list[dict] = []
-    order = list(range(len(df)))
-    rng.shuffle(order)
-    attempt = 0
+    rng = random.Random(seed)
+    order: list[int]
+    pos: int
+    attempt: int
+    n_accepted: int
+
+    loaded: dict[str, Any] | None = None
+    if resume and ckpt_path.is_file():
+        try:
+            with open(ckpt_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            loaded = None
+
+    if loaded:
+        if int(loaded.get("version", 0)) != CHECKPOINT_VERSION:
+            raise SystemExit(
+                f"Unsupported checkpoint version {loaded.get('version')!r} in {ckpt_path}. "
+                "Use --no-resume to start over."
+            )
+        for k, v in run_meta.items():
+            if loaded.get(k) != v:
+                raise SystemExit(
+                    f"Checkpoint at {ckpt_path} does not match this run "
+                    f"(field {k!r}: disk={loaded.get(k)!r} current={v!r}).\n"
+                    "Use --no-resume to discard checkpoint and output, or restore matching inputs."
+                )
+        order = [int(x) for x in loaded["order"]]
+        pos = int(loaded["next_pos"])
+        attempt = int(loaded["attempt"])
+        n_accepted = int(loaded["n_accepted"])
+        _deserialize_rng(str(loaded["rng_state"]), rng)
+        lines_on_disk = _count_jsonl_lines(out_path)
+        if lines_on_disk != n_accepted:
+            raise SystemExit(
+                f"Checkpoint says n_accepted={n_accepted} but {out_path} has "
+                f"{lines_on_disk} non-empty lines.\n"
+                "Files are out of sync; use --no-resume to restart, or repair manually."
+            )
+        if pos > len(order):
+            raise SystemExit(f"Invalid checkpoint next_pos={pos} (order length {len(order)}).")
+        print(
+            f"Resuming: {lines_on_disk} rows in {out_path.name}, "
+            f"next shuffled-doc index {pos}/{len(order)}, attempt {attempt}"
+        )
+    else:
+        if out_path.is_file() and out_path.stat().st_size > 0:
+            raise SystemExit(
+                f"{out_path} already has data but no usable checkpoint at {ckpt_path}.\n"
+                "Use --no-resume to delete both and restart, or move the files aside."
+            )
+        order = list(range(n_df))
+        rng.shuffle(order)
+        pos = 0
+        attempt = 0
+        n_accepted = 0
+        payload = {
+            "version": CHECKPOINT_VERSION,
+            **run_meta,
+            "order": order,
+            "next_pos": pos,
+            "attempt": attempt,
+            "n_accepted": n_accepted,
+            "rng_state": _serialize_rng(rng),
+        }
+        _atomic_write_json(ckpt_path, payload)
+        print(f"Started fresh; checkpoint: {ckpt_path}")
+
     max_attempts = max(n_target * 80, 5000)
+    stop_requested = False
 
-    pbar = tqdm(order, desc="Ground truth candidates", unit="doc")
-    for idx in pbar:
-        if len(accepted) >= n_target:
-            break
-        if attempt >= max_attempts:
-            break
-        attempt += 1
-        pbar.set_postfix(accepted=len(accepted), refresh=False)
-        row = df.iloc[idx]
-        text = str(row["text"])
-        celex = str(row.get("celex_id", "") or "")
-        if not celex:
-            continue
+    def _handle_stop(*_args: Any) -> None:
+        nonlocal stop_requested
+        stop_requested = True
 
-        meta = row_meta(row)
+    prev_sigint = signal.signal(signal.SIGINT, _handle_stop)
 
-        snippet = _pick_snippet(text, rng, snippet_min_chars, snippet_max_chars)
-        if not snippet or snippet not in text:
-            continue
-        if not _snippet_valid_for_all_strategies(text, snippet, meta):
-            continue
+    def _persist_progress(pos_after: int) -> None:
+        payload = {
+            "version": CHECKPOINT_VERSION,
+            **run_meta,
+            "order": order,
+            "next_pos": pos_after,
+            "attempt": attempt,
+            "n_accepted": n_accepted,
+            "rng_state": _serialize_rng(rng),
+        }
+        _atomic_write_json(ckpt_path, payload)
 
-        question = _generate_question(llm, snippet)
-        if not question:
-            continue
+    pbar = tqdm(
+        total=len(order),
+        initial=min(pos, len(order)),
+        desc="Ground truth candidates",
+        unit="doc",
+    )
 
-        accepted.append(
-            {
-                "id": f"gt_{len(accepted):05d}",
+    try:
+        while pos < len(order):
+            if stop_requested:
+                _persist_progress(pos)
+                print(
+                    f"\nStopped. Checkpoint saved ({n_accepted} rows in {out_path}). "
+                    "Re-run the same command to resume."
+                )
+                return
+            if n_accepted >= n_target:
+                break
+            if attempt >= max_attempts:
+                break
+
+            attempt += 1
+            idx = order[pos]
+            row = df.iloc[idx]
+            text = str(row["text"])
+            celex = str(row.get("celex_id", "") or "")
+            pbar.set_postfix(
+                accepted=n_accepted,
+                attempt=attempt,
+                phase="scan",
+                refresh=True,
+            )
+
+            if not celex:
+                pos += 1
+                _persist_progress(pos)
+                pbar.update(1)
+                continue
+
+            meta = row_meta(row)
+
+            snippet = _pick_snippet(text, rng, snippet_min_chars, snippet_max_chars)
+            if not snippet or snippet not in text:
+                pos += 1
+                _persist_progress(pos)
+                pbar.update(1)
+                continue
+            if not _snippet_valid_for_all_strategies(text, snippet, meta):
+                pos += 1
+                _persist_progress(pos)
+                pbar.update(1)
+                continue
+
+            pbar.set_postfix(
+                accepted=n_accepted,
+                attempt=attempt,
+                phase="llm",
+                celex=celex[:12],
+                refresh=True,
+            )
+            if verbose:
+                tqdm.write(
+                    f"LLM ({celex}): validating snippet in all chunk strategies passed; "
+                    f"generating question (snippet chars={len(snippet)})…"
+                )
+
+            question = _generate_question(llm, snippet)
+            if not question:
+                pos += 1
+                _persist_progress(pos)
+                pbar.update(1)
+                continue
+
+            rec = {
+                "id": f"gt_{n_accepted:05d}",
                 "question": question,
                 "reference": celex,
                 "gold_snippet": snippet,
                 "source_len_chars": len(text),
             }
-        )
-        tqdm.write(f"Accepted {len(accepted)}/{n_target}: {accepted[-1]['id']} {celex}")
+            _append_jsonl_record(out_path, rec)
+            n_accepted += 1
+            tqdm.write(f"Accepted {n_accepted}/{n_target}: {rec['id']} {celex}")
 
-    pbar.close()
-    if len(accepted) < n_target:
+            pos += 1
+            _persist_progress(pos)
+            pbar.update(1)
+    finally:
+        pbar.close()
+        signal.signal(signal.SIGINT, prev_sigint)
+
+    if n_accepted >= n_target and ckpt_path.is_file():
+        ckpt_path.unlink()
+        print(f"Target reached; removed checkpoint: {ckpt_path}")
+
+    if n_accepted < n_target:
         print(
-            f"Warning: only {len(accepted)} accepted (target {n_target}). "
+            f"Warning: only {n_accepted} accepted (target {n_target}). "
             "Try lowering --min-doc-chars, increasing in-manifest docs (rebuild without --limit), or more attempts."
         )
-
-    with open(out_path, "w", encoding="utf-8") as f:
-        for row in tqdm(accepted, desc="Writing ground_truth.jsonl", unit="row"):
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"Wrote {len(accepted)} records to {out_path}")
+    print(f"Ground truth file: {out_path} ({n_accepted} records)")
 
 
 def main():
@@ -272,7 +506,8 @@ def main():
         description=(
             "Generate ground_truth.jsonl for RAG eval. "
             "Requires Data/eval_corpus_manifest.json from build_chunk_indices "
-            "(same document scope as Chroma + chunks_*.jsonl)."
+            "(same document scope as Chroma + chunks_*.jsonl). "
+            "Appends each accepted row immediately; use the same command to resume after stop/crash."
         )
     )
     p.add_argument("--n", type=int, default=120, help="Target number of accepted rows")
@@ -302,6 +537,22 @@ def main():
         default=config.EVAL_CORPUS_MANIFEST,
         help="Corpus manifest from build_chunk_indices (default: Data/eval_corpus_manifest.json)",
     )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Delete checkpoint and output file and start from scratch",
+    )
+    p.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Checkpoint JSON path (default: <out>.checkpoint.json next to the JSONL)",
+    )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log when entering LLM question generation (shows work during slow steps)",
+    )
     args = p.parse_args()
     if args.snippet_min_chars > args.snippet_max_chars:
         raise SystemExit("--snippet-min-chars must be <= --snippet-max-chars")
@@ -318,6 +569,10 @@ def main():
         manifest_path=args.manifest,
         snippet_min_chars=args.snippet_min_chars,
         snippet_max_chars=args.snippet_max_chars,
+        resume=not args.no_resume,
+        no_resume=args.no_resume,
+        checkpoint_path=args.checkpoint,
+        verbose=args.verbose,
     )
 
 

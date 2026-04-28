@@ -58,6 +58,21 @@ Data/chunks_*.jsonl
 # Grid eval checkpoint + CSV outputs (Scripts/eval/run_grid_eval.py; use git add -f to archive)
 Data/eval/
 
+# Top-5 / 1000-q eval pipeline (Scripts/eval/run_top5_eval.py, ground_truth_generate_top5.py)
+Data/eval_top5_*/
+Data/ground_truth_top5_*.jsonl
+Data/eval_corpus_manifest_top5.json
+
+# Ground-truth resume checkpoints (Scripts/eval/ground_truth_generate.py)
+Data/*.jsonl.checkpoint.json
+
+# Top-10 four-eval pipeline (Scripts/eval/top10/)
+Data/eval_top10/
+Data/enhanced_questions/
+Data/multi_query_questions/
+Data/neighbor_index/
+Data/chunk_stats.json
+
 # Optional single-file chunk dump used by the main pipeline (CHUNKS_JSONL)
 Data/chunks.jsonl
 
