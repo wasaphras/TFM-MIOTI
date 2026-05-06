@@ -71,10 +71,31 @@ def unload_cross_encoder() -> None:
     global _model
     if _model is None:
         return
+    ce = _model
+    _model = None
     try:
-        del _model
-    finally:
-        _model = None
+        inner = getattr(ce, "model", None)
+        if inner is not None:
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    try:
+                        inner = inner.to("cpu")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                del inner
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        del ce
+    except Exception:
+        pass
     import gc
 
     gc.collect()
@@ -82,6 +103,7 @@ def unload_cross_encoder() -> None:
         import torch
 
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
     except Exception:
         pass

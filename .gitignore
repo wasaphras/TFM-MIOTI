@@ -69,9 +69,11 @@ Data/*.jsonl.checkpoint.json
 
 # Top-10 four-eval pipeline (Scripts/eval/top10/)
 Data/eval_top10/
+Data/eval_top10_dedup/
 Data/enhanced_questions/
 Data/multi_query_questions/
 Data/neighbor_index/
+Data/neighbor_index_dedup/
 Data/chunk_stats.json
 
 # Optional single-file chunk dump used by the main pipeline (CHUNKS_JSONL)

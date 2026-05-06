@@ -15,7 +15,6 @@ from tqdm import tqdm
 from langchain_core.documents import Document
 
 from ... import config
-from ...chunking_strategies import chroma_persist_dir
 from ...embeddings_chromadb import load_vectorstore, release_chroma_process_cache
 from ..metrics import first_hit_rank
 from ..rerank_cross_encoder import unload_cross_encoder
@@ -26,6 +25,7 @@ from ..retrieval_strategies import (
     load_documents_from_chunks_jsonl,
 )
 from ._shared import atomic_write_json, load_ground_truth, sha256_file, validate_gt_against_manifest
+from .dedup_paths import chroma_persist_dir_dedup, chunks_jsonl_path_dedup
 from .pairs import cell_key, pairs_fingerprint
 from .prefetch_io import (
     PREFETCH_META_NAME,
@@ -47,6 +47,7 @@ def _maybe_empty_cuda_cache() -> None:
             import torch
 
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
         except Exception:
             pass
@@ -125,7 +126,6 @@ def _run_prefetch_read_only(
     prefetch_root = Path(prefetch_root)
     bundle_path = prefetch_root / eval_id / PREFETCH_META_NAME
     prefetch_meta_matches_disk(meta, bundle_path)
-    # Drop any in-process embedding client / prior CE so rerank gets a clean VRAM budget.
     unload_cross_encoder()
     gc.collect()
     _maybe_empty_cuda_cache()
@@ -468,7 +468,7 @@ def run_checkpointed_eval(
             _maybe_empty_cuda_cache()
 
         for cid, rid in pairs:
-            chunks_path = config.DATA_DIR / f"chunks_{cid}.jsonl"
+            chunks_path = chunks_jsonl_path_dedup(cid)
             if stop_requested:
                 interrupted = True
                 break
@@ -508,7 +508,7 @@ def run_checkpointed_eval(
 
                 if not chunks_path.is_file():
                     raise FileNotFoundError(f"Missing {chunks_path}")
-                persist_dir = chroma_persist_dir(cid)
+                persist_dir = chroma_persist_dir_dedup(cid)
                 if not (Path(persist_dir) / "chroma.sqlite3").is_file():
                     raise FileNotFoundError(f"Missing Chroma at {persist_dir}")
                 vs = load_vectorstore(persist_dir)
