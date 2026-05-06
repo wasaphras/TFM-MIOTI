@@ -44,7 +44,11 @@ Thumbs.db
 
 # Local DB / vector index files (any path)
 *.sqlite3
+*.sqlite
 *.duckdb
+*.db
+*.db-shm
+*.db-wal
 
 # Chroma persistent vector stores (rebuild via embeddings_chromadb / build_chunk_indices)
 Data/chroma_db/
@@ -52,8 +56,7 @@ Data/chroma_db_sample/
 Data/chroma_chunk_*/
 
 # Large dataset exports (regenerate via data_extraction_load / chunking; GitHub blocks files >100MB)
-Data/train.jsonl
-Data/train_dedup.jsonl
+Data/train*.jsonl
 Data/chunks_*.jsonl
 
 # Grid eval checkpoint + CSV outputs (Scripts/eval/run_grid_eval.py; use git add -f to archive)
