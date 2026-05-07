@@ -2,6 +2,8 @@
 
 Python pipeline to download English EU-law documents from [MultiEURLEX](https://huggingface.co/datasets/coastalcph/multi_eurlex), chunk them with **10 strategies**, embed each into its own **Chroma** vector database (via Ollama), generate **ground-truth** evaluation questions with an LLM, and score **20 retrieval variants** per chunk DB: **10 base** retrievers (dense, BM25, hybrid fusion) plus **10 cross-encoder reranked** counterparts (`*_ce_r50`, same fusion logic after reranking the candidate pool).
 
+**Detailed reference:** for every script module, dedup/top-10 tracks, and `Data/` layout, see [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md).
+
 ---
 
 ## How to run -- exact commands, step by step
@@ -153,6 +155,7 @@ python -m Scripts.eval.run_grid_eval \
 | `rank_breakdown_long.csv` | Per-query rank detail: **20 000** rows for 20 retrievers × 100 GT questions (or **10 000** for 10 bases × 100)                          |
 | `hit_rate_pivot.csv`      | Wide table: chunk strategies as rows, one column per retriever you ran, cells = hit rates                                             |
 
+**Optional — top-5 hybrid slice:** [`Scripts/eval/run_top5_eval.py`](Scripts/eval/run_top5_eval.py) runs five `hyb_*_ce_r50` retrievers on **`len_1000_o100` only**, with a dedicated ground-truth file (see `--ground-truth` default in that module). Same checkpoint semantics as Step 4; details in [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md).
 
 **Resume / checkpoint:** Progress is saved after **every ground-truth query** to `Data/eval/eval_grid_checkpoint.json` (atomic write). If you stop with Ctrl+C, kill the process, or the machine crashes, re-run the **same** command (same ground-truth file, `--limit-queries`, `--chunk-strategies`, `--retrievers`). The run continues where it left off. If you change any of those inputs or edit `ground_truth.jsonl`, delete the checkpoint or pass `--no-resume` to start over. CSV reports are written only when the full grid finishes.
 
@@ -241,6 +244,47 @@ Default `--ground-truth` is `Data/ground_truth.jsonl`. Requires Ollama for embed
 
 ---
 
+### Step 6 -- Dedup corpus and top-10 dedup eval (optional parallel track)
+
+This is **not** Steps 4–5. It uses a **smaller curated document list** (`Data/train_dedup.jsonl`) and separate chunk/Chroma directories (`chunks_dedup_*`, `chroma_chunk_dedup_*`), then runs the **same style of top-10 / k=20** retrieval experiments with checkpoint + prefetch support. Full detail: [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md) (§4, §8).
+
+**Requirements:** Complete **Step 2** for the chunk strategies involved (dedup build **streams** existing `chunks_*.jsonl` / chroma—it does **not** re-call Ollama). You still need **`Data/train_dedup.jsonl`** and **`HF_TOKEN`** as for the rest of the pipeline.
+
+1. Filter indices to dedup CELEX IDs (strategies appearing in curated pairs):
+
+   ```bash
+   python -m Scripts.eval.build_chunk_indices_dedup --top10
+   ```
+
+2. Generate dedup ground truth (answers + validation metadata; writes `Data/ground_truth_dedup_top10_100.jsonl`):
+
+   ```bash
+   python -m Scripts.eval.ground_truth_generate_dedup
+   ```
+
+3. Neighbor index for dedup eval 2 (**only strategies used in curated pairs**):
+   python -m Scripts.eval.top10.neighbor_index_dedup --top10
+   ```
+
+4. **Recommended:** orchestrate GPU phases (conda env `Data` if present, prefetch-write then prefetch-read, optional Ollama stop between phases):
+
+   ```bash
+   bash Scripts/eval/run_dedup_top10_evals.sh
+   ```
+
+   Or run [`Scripts.eval.top10.run_eval1_baseline_dedup`](Scripts/eval/top10/run_eval1_baseline_dedup.py) / [`run_eval2_neighbors_dedup`](Scripts/eval/top10/run_eval2_neighbors_dedup.py) manually with `--prefetch-write` / `--prefetch-read` exactly like Step 5’s phased pattern.
+
+5. Merge baseline + neighbors summaries:
+
+   ```bash
+   python -m Scripts.eval.merge_top10_summaries_dedup
+   ```
+
+**Ragas:** On this dedup track, constrained RAG + Ragas metrics are documented under **“Ragas evaluation”** later in this README (same prerequisites as dedup prefetch `eval1_baseline`).
+
+
+---
+
 ### Cheat sheet -- copy-paste the full pipeline
 
 ```bash
@@ -275,6 +319,38 @@ python -m Scripts.eval.run_grid_eval --limit-queries 10 \
 
 ---
 
+### Ragas evaluation (two-phase LLM triad on the dedup corpus)
+
+This complements hit-rate / MRR with **Ragas** scores on the retrieval + generation pipeline. Defaults target the **best cell** observed in dedup baseline eval (`len_500_o50`, `hyb_fill_dense_then_bm25_ce_r50`, top **20** after cross-encoder rerank, candidate breadth 100)—see `Data/eval_top10_dedup/eval1_baseline/results_summary.csv`.
+
+**Prerequisites:**
+
+- Dedup corpus artifacts: `Data/chunks_dedup_len_500_o50.jsonl`, `Data/chroma_chunk_dedup_len_500_o50/`, plus `Scripts.eval.top10.dedup_paths` paths.
+- Embedding prefetch aligned with **`eval1_baseline`** speeds up Step 1: `Data/eval_top10_dedup/prefetch/eval1_baseline/` (optional; falls back to live Chroma + rerank).
+
+**Frozen defaults (generation):** `--chunk-strategy len_500_o50`, `--retriever hyb_fill_dense_then_bm25_ce_r50`, `--final-k 20`, `--candidate-k 100`, ground truth `Data/ground_truth_dedup_top10_100.jsonl`.
+
+1. **Step A — Replay retrieval and write constrained RAG answers** (writes `rag_responses_v2` JSONL including `ground_truth_answer` / `reference_contexts`):
+
+   ```bash
+   python -m Scripts.eval.llm_triad.generate_rag_responses
+   ```
+
+2. **Step B — Ragas judge** (`full` metric set unless `--metrics minimal`; produces row-level JSONL, a wide CSV summary, `*_summary_stats.json` with mean / stdev per metric, and `*.meta.json` with checksums):
+
+   ```bash
+   python -m Scripts.eval.llm_triad.judge_rag_triad \
+     --in Data/eval_top10_dedup/llm_triad_len500_hyb_fill/rag_responses.jsonl \
+     --out Data/eval_top10_dedup/llm_triad_len500_hyb_fill/ragas_scores.jsonl \
+     --ground-truth Data/ground_truth_dedup_top10_100.jsonl
+   ```
+
+   `--ground-truth` is **optional** for new `rag_responses_v2` rows (fields already on disk) but **recommended** for lineage and to backfill legacy `rag_responses_v1` artifacts.
+
+**Interpretation caveats:** The field `ground_truth.answer` (propagated as `ground_truth_answer`) is **LLM-authored** when the dedup ground-truth file was built; Ragas `answer_correctness` / context metrics that use it are relative to that proxy, not independent human labels. Use the same Ollama chat and embedding models as in `Scripts/config.py` for comparability, or pass `--judge-model` / `--embedding-model` explicitly and record them in the thesis. `ragas==0.4.3` is pinned in `requirements.txt`.
+
+---
+
 ### Optional: interactive RAG (not part of the eval grid)
 
 ```bash
@@ -289,7 +365,7 @@ python run_api.py   # or: python -m Scripts.api
 
 | Requirement                | Notes                                                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Conda env**              | Create one and install deps: `pip install -r requirements.txt` (installs `sentence-transformers` and PyTorch for eval reranking)     |
+| **Conda / Python**       | Recommend **Python 3.11+**. Install deps: `pip install -r requirements.txt` (includes LangChain stack, **chromadb**, **rank_bm25**, **sentence-transformers** → typically pulls **PyTorch** for CUDA/CPU reranking, and **ragas==0.4.3** + **datasets**) |
 | **Ollama**                 | Pull embedding + chat models: see Step 0 above                                                                                       |
 | **GPU (optional)**         | Recommended for the full 10×20 eval with default reranker `BAAI/bge-reranker-v2-m3`; CPU works but is slower                         |
 | **HF_TOKEN**               | Hugging Face token (env var read by `config.py`). **Do not commit tokens.** Needed when Step 1 must download the dataset tarball if `Data/train.jsonl` is missing. The downloader also mentions `HUGGINGFACE_HUB_TOKEN` in its warning text; either can satisfy the Hub depending on library behavior, but this repo passes `HF_TOKEN` explicitly. |
@@ -313,6 +389,8 @@ For `qwen3-embedding:4b` on current Ollama, the native maximum is 2560: requesti
 
 `Data/eval_corpus_manifest.json` lists the CELEX IDs of every document loaded when you ran `build_chunk_indices` (same scope as `train.jsonl` + optional `--limit`).
 
+**Dedup manifest:** `Data/eval_corpus_manifest_dedup.json` is the CELEX scope written by `build_chunk_indices_dedup`; `ground_truth_generate_dedup`, dedup top-10 evals, and `llm_triad` default paths must stay consistent with that file.
+
 1. **build_chunk_indices** writes this file **after** loading the dataframe, **before** chunking.
 2. **ground_truth_generate** **requires** the manifest and only samples documents whose `celex_id` is in the list.
 3. **run_grid_eval** **requires** the manifest and aborts if any GT `reference` CELEX is missing (no silent all-zero eval from scope drift).
@@ -332,6 +410,14 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `Data/chunks_<strategy>.jsonl`          | Chunks for BM25 + chunk_uid alignment                           |
 | `Data/chroma_chunk_<strategy>/`         | Chroma persistence per chunking strategy                        |
 | `Data/ground_truth.jsonl`               | Eval queries + gold snippet + reference CELEX                   |
+| `Data/train_dedup.jsonl`                | Dedup training subset (CELEX-filtered docs)                    |
+| `Data/eval_corpus_manifest_dedup.json` | CELEX scope after `build_chunk_indices_dedup`                 |
+| `Data/chunks_dedup_<strategy>.jsonl`    | Dedup chunk lines (subset of `chunks_<strategy>.jsonl`)        |
+| `Data/chroma_chunk_dedup_<strategy>/`    | Dedup Chroma DBs                                              |
+| `Data/ground_truth_dedup_top10_100.jsonl` | Dedup eval (+ LLM `answer` for Ragas lineage)                |
+| `Data/neighbor_index_dedup/`            | Pickled neighbor indices for dedup eval 2                      |
+| `Data/eval_top10/`                      | Standard top-10 four-eval outputs + prefetch                  |
+| `Data/eval_top10_dedup/`                | Dedup top-10 eval (eval1/eval2) + prefetch + merges          |
 | `Data/eval/*.csv`                       | Grid eval outputs (written when a full grid finishes)           |
 | `Scripts/config.py`                     | Paths, model names, collection name, `DOC_LIMIT` (default 1000 docs) |
 | `Scripts/data_extraction_load.py`       | HF download -> `train.jsonl`                                    |
@@ -342,15 +428,17 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `Scripts/retriever.py`                  | Dense retrieve + RAG answer                                     |
 | `Scripts/main.py`                       | End-to-end demo pipeline                                        |
 | `Scripts/api.py`                        | FastAPI `/chat`                                                 |
-| `Scripts/eval/build_chunk_indices.py`   | Chunk all strategies, embed, resume-safe                        |
+| `Scripts/eval/build_chunk_indices_dedup.py` | Dedup index filter (streams standard chunk files → dedup paths) |
+| `Scripts/eval/ground_truth_generate_dedup.py` | Dedup ground-truth builder                          |
+| `Scripts/eval/merge_top10_summaries_dedup.py` | Merge dedup baseline + neighbors summaries           |
 | `Scripts/eval/ground_truth_generate.py` | LLM questions from in-corpus snippets                           |
 | `Scripts/eval/retrieval_strategies.py`  | **20** retrievers: 10 baselines + 10 `*_ce_r50` rerank variants |
 | `Scripts/eval/rerank_cross_encoder.py`  | Cross-encoder rerank (`RERANK_MODEL` in config)                 |
 | `Scripts/eval/metrics.py`               | Hit rate, MRR, rank buckets                                     |
 | `Scripts/eval/run_grid_eval.py`         | Full grid + CSV outputs                                         |
+| `Scripts/eval/llm_triad/`               | Rag replay + Ragas scoring (`generate_rag_responses`, `judge_rag_triad`) |
 
-**Clones and Git:** Large generated paths are listed in `.gitignore` (including `Data/train.jsonl`, `Data/chunks_*.jsonl`, every `Data/chroma_*` directory, and `Data/eval/`). A fresh clone has the **scripts and small metadata** in `Data/`; run **Step 1** and **Step 2** locally to recreate `train.jsonl`, chunk JSONLs, and Chroma before ground truth or eval.
-
+**Clones and Git:** Heavy generated paths are listed in `.gitignore`—including **`Data/train*.jsonl`** (covers `train_dedup.jsonl`), **`Data/chunks_*.jsonl`** (covers `chunks_dedup_*`), **`Data/chroma_chunk_*/`** (covers dedup chroma dirs), **`Data/eval/`**, **`Data/eval_top10/`**, **`Data/eval_top10_dedup/`**, neighbor indices, prefetch trees, Ragas artefacts under those trees, etc. A fresh clone has the **scripts and small checked-in metadata** under `Data/`; run Steps **1–2** (and, for dedup, **Step 6** subset) locally before ground-truth generation or scoring.
 ---
 
 ## CLI entry points
@@ -370,14 +458,18 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `python -m Scripts.api`                                                  | Start API server                                       |
 | `python -m Scripts.embeddings_chromadb`                                  | Dev: chunk + embed default Chroma                      |
 | `python -m Scripts.chunking`                                             | Dev: default chunker -> `chunks.jsonl`                 |
-
-
+| `python -m Scripts.eval.build_chunk_indices_dedup --top10`               | Dedup chunk JSONLs + Chroma (filter from standard artifacts) |
+| `python -m Scripts.eval.ground_truth_generate_dedup`                     | Dedup ground truth JSONL (100-row style)                       |
+| `python -m Scripts.eval.top10.neighbor_index_dedup --top10`           | Dedup neighbor index PKLs for paired strategies                |
+| `python -m Scripts.eval.merge_top10_summaries_dedup`                   | Merge `eval_top10_dedup` baseline + neighbors CSVs           |
+| `bash Scripts/eval/run_dedup_top10_evals.sh`                            | Scripted dedup eval1/eval2 with prefetch splits                |
 Common flags:
 
 - **build_chunk_indices**: `--limit N`, `--force`, `--all`, `--only-strategy <id>`
 - **ground_truth_generate**: `--n`, `--seed`, `--min-doc-chars`, `--snippet-min-chars`, `--snippet-max-chars`, `--manifest`, `--out`
 - **run_grid_eval**: `--ground-truth`, `--out`, `--manifest`, `--retrievers` (subset; default = all 20), `--chunk-strategies`, `--limit-queries`, `--no-resume`, `--checkpoint`
-
+- **build_chunk_indices_dedup**: `--top10` (subset to chunk strategies in curated pairs) or `--strategies` list
+- **judge_rag_triad**: `--metrics full|minimal`, `--ground-truth` (recommended for lineage), `--ragas-timeout`, `--resume`
 ---
 
 ## Troubleshooting
@@ -445,6 +537,7 @@ If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) 
 | `RETRIEVAL_CANDIDATE_K`    | First-stage pool size before rerank (default `50`)                                                 |
 | `RERANK_PASSAGE_MAX_CHARS` | Truncate chunk text passed to the reranker (default `8000`)                                        |
 | `EVAL_CUDA_EMPTY_CACHE`    | Set to `1` / `true` to call `torch.cuda.empty_cache()` after each chunk strategy in the eval grid |
-
-
-Model names stay in `Scripts/config.py` (no secrets).
+| `DEDUP_EVAL_OLLAMA_STOP`    | Dedup bash driver: optional `ollama stop` after prefetch-write (`run_dedup_top10_evals.sh`) |
+| `DEDUP_EVAL_RESET` / `--reset` | Wipe dedup prefetch + eval checkpoints (see shell script header) |
+| `DEDUP_CONDA_ENV`           | Override conda env name (default **`Data`**) used by dedup bash driver |
+| `DEDUP_NO_CONDA`            | Set `1` to use plain `python` on PATH in dedup bash driver           |Model names stay in `Scripts/config.py` (no secrets).

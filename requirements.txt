@@ -15,3 +15,5 @@ ollama
 fastapi
 uvicorn
 pydantic
+ragas==0.4.3
+datasets
