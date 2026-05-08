@@ -204,7 +204,7 @@ Typical filenames: `rag_responses.jsonl`, `rag_responses.jsonl.meta.json`, `raga
 | File | Purpose |
 |------|---------|
 | [`generate_rag_responses.py`](../Scripts/eval/llm_triad/generate_rag_responses.py) | Replay retriever (+prefetch); constrained RAG via `SYSTEM_PROMPT`; emits `rag_responses_v2` JSONL (`ground_truth_answer`, `reference_contexts`). |
-| [`judge_rag_triad.py`](../Scripts/eval/llm_triad/judge_rag_triad.py) | `ragas.evaluate` with **`full`** (default) or **`minimal`** metrics; optional `--ground-truth` merge for legacy artifacts; skips rows without contexts; emits scores JSONL + CSV + `*_summary_stats.json`. |
+| [`judge_rag_triad.py`](../Scripts/eval/llm_triad/judge_rag_triad.py) | `ragas.evaluate` with **`local`** (default: `answer_similarity` + non-LLM context metrics) or **`minimal`** / **`full`**. **`--provider auto|gemini|ollama`**: Gemini via `.env` (`GEMINI_API_KEY`, optional `GEMINI_MODEL` / `GEMINI_EMBEDDING_MODEL`). Optional `--ground-truth` merge. Emits JSONL + CSV + stats. Uses raw LangChain providers so Ragas applies **`RunConfig`**; Ollama judge uses **`format=json`**. |
 
 ---
 

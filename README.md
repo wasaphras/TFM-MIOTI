@@ -336,7 +336,21 @@ This complements hit-rate / MRR with **Ragas** scores on the retrieval + generat
    python -m Scripts.eval.llm_triad.generate_rag_responses
    ```
 
-2. **Step B — Ragas judge** (`full` metric set unless `--metrics minimal`; produces row-level JSONL, a wide CSV summary, `*_summary_stats.json` with mean / stdev per metric, and `*.meta.json` with checksums):
+2. **Step B — Ragas judge** (**default `--metrics local`**, **default `--provider auto`** → Gemini when `GEMINI_API_KEY` is present in `.env`, else Ollama). Judges + embeddings route through Gemini API + `GEMINI_MODEL` / `GEMINI_EMBEDDING_MODEL` (defaults in script) when using Gemini:
+
+   ```bash
+   pip install langchain-google-genai python-dotenv   # listed in requirements.txt
+   ```
+
+   Put in project root **`.env`** (already gitignored), plain values:
+
+   ```
+   GEMINI_API_KEY=<your-api-key>
+   GEMINI_MODEL=gemini-2.0-flash
+   GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+   ```
+
+   Then run Step B as usual (no extra flags needed if `GEMINI_API_KEY` is set):
 
    ```bash
    python -m Scripts.eval.llm_triad.judge_rag_triad \
@@ -345,9 +359,11 @@ This complements hit-rate / MRR with **Ragas** scores on the retrieval + generat
      --ground-truth Data/ground_truth_dedup_top10_100.jsonl
    ```
 
-   `--ground-truth` is **optional** for new `rag_responses_v2` rows (fields already on disk) but **recommended** for lineage and to backfill legacy `rag_responses_v1` artifacts.
+   Force Ollama for Ragas explicitly: **`--provider ollama`**. Force Gemini: **`--provider gemini`** (fails fast if key missing).
 
-**Interpretation caveats:** The field `ground_truth.answer` (propagated as `ground_truth_answer`) is **LLM-authored** when the dedup ground-truth file was built; Ragas `answer_correctness` / context metrics that use it are relative to that proxy, not independent human labels. Use the same Ollama chat and embedding models as in `Scripts/config.py` for comparability, or pass `--judge-model` / `--embedding-model` explicitly and record them in the thesis. `ragas==0.4.3` is pinned in `requirements.txt`.
+   **`--ground-truth`:** optional for v2 rows that already carry `ground_truth_answer` and non-empty `reference_contexts`, but **recommended** for lineage and for `local` if any row lacks those fields (the script skips with `ragas_skip_reason`). For `--metrics full`, it also backfills answers for reference-based LLM metrics.
+
+**Interpretation caveats:** The field `ground_truth.answer` (propagated as `ground_truth_answer`) is **LLM-authored** when the dedup ground-truth file was built; scores that compare to it (e.g. `answer_similarity`, `answer_correctness` in **full** mode) are relative to that proxy, not independent human labels. Ragas reproducibility depends on **`ragas_provider` + model IDs** logged in `.meta.json` (Gemini chat + embedding IDs or Ollama model names); keep them stable across thesis runs.
 
 ---
 
@@ -365,7 +381,7 @@ python run_api.py   # or: python -m Scripts.api
 
 | Requirement                | Notes                                                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Conda / Python**       | Recommend **Python 3.11+**. Install deps: `pip install -r requirements.txt` (includes LangChain stack, **chromadb**, **rank_bm25**, **sentence-transformers** → typically pulls **PyTorch** for CUDA/CPU reranking, and **ragas==0.4.3** + **datasets**) |
+| **Conda / Python**       | Recommend **Python 3.11+**. Install deps: `pip install -r requirements.txt` (includes LangChain stack, **chromadb**, **rank_bm25**, **sentence-transformers** → typically pulls **PyTorch** for CUDA/CPU reranking, **ragas==0.4.3**, **rapidfuzz** for non-LLM Ragas distances, **datasets**, **python-dotenv**, **langchain-google-genai**) |
 | **Ollama**                 | Pull embedding + chat models: see Step 0 above                                                                                       |
 | **GPU (optional)**         | Recommended for the full 10×20 eval with default reranker `BAAI/bge-reranker-v2-m3`; CPU works but is slower                         |
 | **HF_TOKEN**               | Hugging Face token (env var read by `config.py`). **Do not commit tokens.** Needed when Step 1 must download the dataset tarball if `Data/train.jsonl` is missing. The downloader also mentions `HUGGINGFACE_HUB_TOKEN` in its warning text; either can satisfy the Hub depending on library behavior, but this repo passes `HF_TOKEN` explicitly. |
@@ -469,7 +485,8 @@ Common flags:
 - **ground_truth_generate**: `--n`, `--seed`, `--min-doc-chars`, `--snippet-min-chars`, `--snippet-max-chars`, `--manifest`, `--out`
 - **run_grid_eval**: `--ground-truth`, `--out`, `--manifest`, `--retrievers` (subset; default = all 20), `--chunk-strategies`, `--limit-queries`, `--no-resume`, `--checkpoint`
 - **build_chunk_indices_dedup**: `--top10` (subset to chunk strategies in curated pairs) or `--strategies` list
-- **judge_rag_triad**: `--metrics full|minimal`, `--ground-truth` (recommended for lineage), `--ragas-timeout`, `--resume`
+- **judge_rag_triad**: `--provider auto|ollama|gemini` (auto = gemini when `GEMINI_API_KEY` is set), `--gemini-model` / `--gemini-embedding-model`, `--metrics local|minimal|full` (default **local**), `--context-max-chars`, `--ground-truth` (recommended), `--ragas-timeout` (default 900s), `--ragas-max-workers` (default **1**), `--batch-size` (default 1 row per `evaluate()`), `--ollama-num-ctx` / `--ollama-num-predict` / `--ollama-plain-output` (Ollama only), `--resume`
+
 ---
 
 ## Troubleshooting
@@ -519,6 +536,12 @@ export RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 
 Optional: `export RETRIEVAL_CANDIDATE_K=40` to reduce candidate pool size.
 
+### Ragas judge: `RagasOutputParserException`, `fix_output_format failed to parse`
+
+This happens only on **`minimal`/`full`** (faithfulness, context precision/recall, answer relevancy, etc.). The judge LLM must return **strict JSON** for Ragas prompts; smaller Ollama chats often reply with prose or **truncated JSON**.
+
+**Prefer `--metrics local`** (default): no judge chat—only embeddings + lexical context overlap (`rapidfuzz`). If you stay on **`full`/`minimal`**: **`--provider gemini`** avoids many Ollama JSON parse failures. On Ollama only: omit `--ollama-plain-output`, widen **`--ollama-num-ctx`**, **`--ollama-num-predict`**, **`--ragas-timeout`**, or use a **`--judge-model`** that follows JSON reliably.
+
 ### Chroma `InternalError` / HNSW compaction during `build_chunk_indices`
 
 If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) ensure you are on a recent `chromadb`; (2) delete the `Data/chroma_chunk_<strategy>/` directory for the failing strategy and **resume** (JSONL is kept; only Chroma is rebuilt). The embedder uses small sub-batches and retries to reduce this class of failure.
@@ -531,6 +554,9 @@ If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) 
 | Variable                   | Used for                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------- |
 | `HF_TOKEN`                 | `huggingface_hub` download in `data_extraction_load`                                               |
+| `GEMINI_API_KEY`           | Loaded from project `.env`; enables **Gemini** for `judge_rag_triad` when `--provider` is gemini/auto |
+| `GEMINI_MODEL`             | Gemini chat ID for Ragas judge (minimal/full); default in code `gemini-2.0-flash` if unset |
+| `GEMINI_EMBEDDING_MODEL`    | Gemini embedding ID (local + embedding metrics); default `gemini-embedding-001` if unset |
 | `RERANK_MODEL`             | Cross-encoder checkpoint ID (default: `BAAI/bge-reranker-v2-m3`)                                   |
 | `RERANK_DEVICE`            | `cpu` or `cuda` / `cuda:0` to pin the reranker; if unset, tries CUDA then falls back to CPU on OOM |
 | `RERANK_PREDICT_BATCH_SIZE` | Batch size for cross-encoder `predict` (default `32`; lower reduces peak VRAM during rerank)      |
@@ -540,4 +566,7 @@ If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) 
 | `DEDUP_EVAL_OLLAMA_STOP`    | Dedup bash driver: optional `ollama stop` after prefetch-write (`run_dedup_top10_evals.sh`) |
 | `DEDUP_EVAL_RESET` / `--reset` | Wipe dedup prefetch + eval checkpoints (see shell script header) |
 | `DEDUP_CONDA_ENV`           | Override conda env name (default **`Data`**) used by dedup bash driver |
-| `DEDUP_NO_CONDA`            | Set `1` to use plain `python` on PATH in dedup bash driver           |Model names stay in `Scripts/config.py` (no secrets).
+| `DEDUP_NO_CONDA`            | Set `1` to use plain `python` on PATH in dedup bash driver           |
+
+
+Model names stay in `Scripts/config.py` (no secrets).

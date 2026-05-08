@@ -6,8 +6,31 @@ Modify these variables to tune system behavior.
 import os
 from pathlib import Path
 
-# Project root (Scripts/ parent)
+# Project root (Scripts/ parent) — define before `.env` load path uses it.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+try:
+    from dotenv import load_dotenv as _dotenv_load
+except ImportError:
+    _dotenv_load = None  # type: ignore[assignment, misc]
+
+
+def load_project_dotenv(*, override: bool = False) -> None:
+    """Load optional ``GEMINI_*`` keys (and peers) from ``<project_root>/.env``.
+
+    Calls are idempotent-ish: with ``override=False`` (default), existing environment
+    variables win.
+    """
+
+    if _dotenv_load is None:
+        return
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.is_file():
+        _dotenv_load(env_path, override=override)
+
+
+# Hydrate GEMINI_* and other `.env` keys before downstream os.environ lookups.
+load_project_dotenv()
 
 # --- Data paths ---
 DATA_DIR = PROJECT_ROOT / "Data"

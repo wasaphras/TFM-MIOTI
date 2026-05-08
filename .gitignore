@@ -9,7 +9,7 @@ venv/
 ENV/
 env/
 
-# Environment and secrets
+# Environment and secrets — never commit `.env` (GEMINI_API_KEY, etc.); use `.env.example` only.
 .env
 .env.*
 !.env.example

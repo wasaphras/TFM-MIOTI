@@ -6,7 +6,21 @@ Step 2: Load rag_responses JSON/JSONL and score with RAGAS.
 ``full`` adds reference-based metrics (requires ``ground_truth_answer`` on each row or
 ``--ground-truth`` merge): context_precision, context_recall, answer_correctness.
 
-Uses LangChain Ollama chat + embeddings like the rest of the TFM stack.
+``local`` (default) prefers **embedding + lexical** metrics — no judge chat LLM —
+``answer_similarity`` + ``non_llm_context_precision_with_reference``
++ ``non_llm_context_recall``. Use this when Ollama chat models repeatedly fail Ragas JSON
+prompts (`OutputParserException` on faithfulness / context_precision, etc.). ``minimal``
+/ ``full`` still need a stronger JSON-compliant judge (`--judge-model`).
+
+Uses LangChain embeddings + optional chat judge: **Ollama** (default when no
+``GEMINI_API_KEY``) or **Google Gemini** via project ``.env`` (``GEMINI_API_KEY``,
+``GEMINI_MODEL``) and ``--provider gemini`` / ``auto``.
+
+Concurrency: Ragas submits ``len(metrics)`` jobs **per dataset row**. Defaults are tuned
+for a **single-GPU**: **one GT row per** ``evaluate()`` and **``ragas-max-workers=1``**.
+
+LLM-backed metrics expect **structured JSON**. For ``minimal``/``full`` on Ollama, weak
+local models often fail — use ``--provider gemini`` or ``--metrics local``.
 """
 
 from __future__ import annotations
@@ -15,6 +29,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import statistics
 import warnings
 
@@ -26,12 +41,13 @@ from typing import Any
 from datasets import Dataset
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas import evaluate
-from ragas.embeddings import LangchainEmbeddingsWrapper
-from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import (
     ContextRelevance,
+    NonLLMContextPrecisionWithReference,
+    NonLLMContextRecall,
     answer_correctness,
     answer_relevancy,
+    answer_similarity,
     context_precision,
     context_recall,
     faithfulness,
@@ -40,6 +56,93 @@ from ragas.run_config import RunConfig
 
 from ... import config
 from ..top10._shared import atomic_write_json, load_ground_truth, sha256_file
+
+# Ensure `.env` is loaded when this module is the entry point (config already loads it on import).
+config.load_project_dotenv()
+
+
+def _resolve_provider_flag(flag: str) -> str:
+    if flag != "auto":
+        return flag
+    return "gemini" if os.environ.get("GEMINI_API_KEY", "").strip() else "ollama"
+
+
+def _gemini_api_key_or_raise() -> str:
+    k = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not k:
+        raise SystemExit(
+            "Provider is gemini but GEMINI_API_KEY is empty. "
+            "Add it to the project .env (project root) or export it in the shell."
+        )
+    return k
+
+
+def _resolve_gemini_chat_model(args: argparse.Namespace) -> str:
+    if getattr(args, "gemini_model", None):
+        s = str(args.gemini_model).strip()
+        if s:
+            return s
+    env_m = os.environ.get("GEMINI_MODEL", "").strip()
+    return env_m or "gemini-2.0-flash"
+
+
+def _resolve_gemini_embedding_model(args: argparse.Namespace) -> str:
+    if getattr(args, "gemini_embedding_model", None):
+        s = str(args.gemini_embedding_model).strip()
+        if s:
+            return s
+    env_m = os.environ.get("GEMINI_EMBEDDING_MODEL", "").strip()
+    # Google AI `embedContent`; `text-embedding-004` / legacy IDs often 404 on v1beta — use current GA id.
+    return env_m or "gemini-embedding-001"
+
+
+def build_judge_chat_gemini(args: argparse.Namespace) -> Any:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    return ChatGoogleGenerativeAI(
+        model=_resolve_gemini_chat_model(args),
+        temperature=0.0,
+        google_api_key=_gemini_api_key_or_raise(),
+    )
+
+
+def build_judge_chat(args: argparse.Namespace, *, provider: str) -> Any:
+    if provider == "ollama":
+        return build_judge_chat_ollama(args)
+    return build_judge_chat_gemini(args)
+
+
+def build_ragas_embeddings(args: argparse.Namespace, *, provider: str) -> Any:
+    if provider == "ollama":
+        return OllamaEmbeddings(model=args.embedding_model)
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+    return GoogleGenerativeAIEmbeddings(
+        model=_resolve_gemini_embedding_model(args),
+        google_api_key=_gemini_api_key_or_raise(),
+    )
+
+
+def resolve_effective_model_labels(args: argparse.Namespace, *, provider: str) -> tuple[str, str]:
+    """(chat_or_judge_display_name, embedding_display_name) for logs and CSV lines."""
+    if provider == "gemini":
+        return _resolve_gemini_chat_model(args), _resolve_gemini_embedding_model(args)
+    return str(args.llm_model), str(args.embedding_model)
+
+
+def build_judge_chat_ollama(args: argparse.Namespace) -> ChatOllama:
+    """ChatOllama tuned for Ragas JSON prompts (reduces RagasOutputParserException)."""
+    kw: dict[str, Any] = {
+        "model": args.llm_model,
+        "temperature": 0.0,
+        "num_ctx": max(512, int(args.ollama_num_ctx)),
+    }
+    if not args.ollama_plain_output:
+        kw["format"] = "json"
+    npred = getattr(args, "ollama_num_predict", None)
+    if npred is not None and int(npred) > 0:
+        kw["num_predict"] = max(1, int(npred))
+    return ChatOllama(**kw)
 
 
 def load_rag_artifact(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -76,7 +179,11 @@ def _load_done_ids(path: Path) -> set[str]:
     return done
 
 
-def _contexts_from_docs(docs: list[dict[str, Any]]) -> list[str]:
+def _contexts_from_docs(
+    docs: list[dict[str, Any]],
+    *,
+    max_chars: int | None = None,
+) -> list[str]:
     """Plain strings for RAGAS ``retrieved_contexts`` (one list element per chunk)."""
     out: list[str] = []
     for d in docs:
@@ -84,6 +191,8 @@ def _contexts_from_docs(docs: list[dict[str, Any]]) -> list[str]:
             continue
         text = str(d.get("page_content") or "").strip()
         if text:
+            if max_chars is not None and len(text) > max_chars > 0:
+                text = text[:max_chars] + "\n[truncated]"
             out.append(text)
     return out
 
@@ -96,6 +205,26 @@ def _reference_answer(row: dict[str, Any]) -> str:
 def _gt_index(gt_path: Path) -> dict[str, dict[str, Any]]:
     gt = load_ground_truth(Path(gt_path))
     return {str(r.get("id") or ""): r for r in gt if r.get("id")}
+
+
+def _reference_contexts_list(row: dict[str, Any]) -> list[str]:
+    rc = row.get("reference_contexts")
+    if isinstance(rc, list):
+        xs = [str(x).strip() for x in rc if str(x).strip()]
+        if xs:
+            return xs
+    gs = str(row.get("gold_snippet") or "").strip()
+    return [gs] if gs else []
+
+
+def _maybe_truncate_text(text: str, max_chars: int | None) -> str:
+    if max_chars is None or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n[truncated]"
+
+
+def _truncate_context_list(ctxs: list[str], max_chars: int | None) -> list[str]:
+    return [_maybe_truncate_text(c, max_chars) for c in ctxs]
 
 
 def augment_items_from_ground_truth(items: list[dict[str, Any]], gt_path: Path) -> None:
@@ -115,6 +244,12 @@ def augment_items_from_ground_truth(items: list[dict[str, Any]], gt_path: Path) 
 
 
 def _build_metrics(mode: str) -> list[Any]:
+    if mode == "local":
+        return [
+            answer_similarity,
+            NonLLMContextPrecisionWithReference(),
+            NonLLMContextRecall(),
+        ]
     base: list[Any] = [
         faithfulness,
         answer_relevancy,
@@ -134,6 +269,15 @@ def metric_names(metrics: list[Any]) -> list[str]:
         if isinstance(name, str):
             out.append(name)
     return out
+
+
+def metrics_need_chat_llm(metrics: list[Any]) -> bool:
+    try:
+        from ragas.metrics.base import MetricWithLLM
+
+        return any(isinstance(m, MetricWithLLM) for m in metrics)
+    except Exception:
+        return True
 
 
 def _float_metric(v: Any) -> float | None:
@@ -173,15 +317,20 @@ def write_csv_summary(
             w.writerow({k: r.get(k) for k in fieldnames})
 
 
-def _classify_skip(row: dict[str, Any], *, full: bool) -> str | None:
+def _classify_skip(row: dict[str, Any], *, metrics_mode: str) -> str | None:
     docs = row.get("retrieved_documents")
     if not isinstance(docs, list):
         return "missing_retrieved_documents"
     ctxs = _contexts_from_docs(docs)
     if not ctxs:
         return "empty_retrieved_contexts"
-    if full and not _reference_answer(row):
+    if metrics_mode == "full" and not _reference_answer(row):
         return "missing_ground_truth_answer"
+    if metrics_mode == "local":
+        if not _reference_answer(row):
+            return "missing_ground_truth_answer"
+        if not _reference_contexts_list(row):
+            return "missing_reference_contexts"
     return None
 
 
@@ -233,30 +382,96 @@ def main() -> None:
     )
     p.add_argument("--limit-queries", type=int, default=None, metavar="N")
     p.add_argument(
+        "--provider",
+        choices=("auto", "ollama", "gemini"),
+        default="auto",
+        help=(
+            "Ragas judge + embeddings backend: "
+            "auto picks gemini when GEMINI_API_KEY is set (after loading .env), otherwise ollama."
+        ),
+    )
+    p.add_argument(
         "--metrics",
-        choices=("minimal", "full"),
-        default="full",
-        help="full = default Ragas-style bundle incl. reference-based metrics",
+        choices=("local", "minimal", "full"),
+        default="local",
+        help=(
+            "local = answer_similarity + non-LLM context precision/recall (no judge chat; "
+            "needs ground_truth_answer + reference_contexts). "
+            "minimal/full = LLM metrics (fragile on small Ollama models)."
+        ),
     )
     p.add_argument(
         "--llm-model",
         "--judge-model",
         dest="llm_model",
         default=config.LLM_MODEL,
-        help="Ollama chat model for RAGAS metrics (alias: --judge-model)",
+        help="Chat model name when --provider is ollama (alias: --judge-model)",
     )
     p.add_argument(
         "--embedding-model",
         default=config.EMBEDDING_MODEL,
-        help="Ollama embedding model (required for answer_relevancy / answer_correctness similarity)",
+        help=(
+            "Embedding model when --provider is ollama. "
+            "For gemini, use GEMINI_EMBEDDING_MODEL or --gemini-embedding-model."
+        ),
+    )
+    p.add_argument(
+        "--gemini-model",
+        default=None,
+        metavar="ID",
+        help="Override GEMINI_MODEL (.env) for Gemini chat (ignored for ollama).",
+    )
+    p.add_argument(
+        "--gemini-embedding-model",
+        default=None,
+        metavar="ID",
+        help="Override Gemini embeddings model (default: gemini-embedding-001).",
+    )
+    p.add_argument(
+        "--context-max-chars",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "If >0, truncate each retrieved AND each reference context string to N chars "
+            "(suffix [truncated]). 0 = no truncation."
+        ),
+    )
+    p.add_argument(
+        "--ollama-plain-output",
+        action="store_true",
+        help=(
+            "Disable Ollama JSON format (no format=json). Ragas expects JSON-shaped "
+            "answers; only use this if JSON mode breaks your model."
+        ),
+    )
+    p.add_argument(
+        "--ollama-num-ctx",
+        type=int,
+        default=16384,
+        metavar="TOK",
+        help=(
+            "Judge model context size. Small values truncate long metric prompts mid-JSON "
+            "and cause Ragas parse errors. Lower if you hit OOM."
+        ),
+    )
+    p.add_argument(
+        "--ollama-num-predict",
+        type=int,
+        default=8192,
+        metavar="TOK",
+        help=(
+            "Max new tokens for judge chat (minimal/full). 0 = omit (Ollama default). "
+            "Ignored for --metrics local (no judge LLM)."
+        ),
     )
     p.add_argument("--resume", action="store_true")
     p.add_argument(
         "--ragas-timeout",
         type=int,
-        default=300,
+        default=900,
         metavar="SEC",
-        help="Per-operation timeout for RAGAS",
+        help="Per-metric-job timeout for RAGAS (single LLM call chain; increase if Ollama is slow)",
     )
     p.add_argument(
         "--ragas-max-retries",
@@ -266,11 +481,24 @@ def main() -> None:
         help="Passed to RunConfig.max_retries",
     )
     p.add_argument(
+        "--ragas-max-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "RAGAS Executor parallelism (default 1 = strictly sequential metric jobs; "
+            "raise only if you want concurrent calls and VRAM allows)"
+        ),
+    )
+    p.add_argument(
         "--batch-size",
         type=int,
-        default=None,
+        default=1,
         metavar="N",
-        help="Optional batch size passed to ragas.evaluate",
+        help=(
+            "How many ground-truth rows per ragas.evaluate() call (default 1). "
+            "Use >>1 only if models are fast enough; larger values multiply parallel jobs."
+        ),
     )
     p.add_argument(
         "--debug-metrics",
@@ -278,6 +506,11 @@ def main() -> None:
         help="Pass raise_exceptions=True into ragas.evaluate",
     )
     args = p.parse_args()
+
+    provider = _resolve_provider_flag(args.provider)
+    if provider == "gemini":
+        _gemini_api_key_or_raise()
+    effective_llm, effective_emb = resolve_effective_model_labels(args, provider=provider)
 
     in_path = Path(args.in_path)
     _, items = load_rag_artifact(in_path)
@@ -302,9 +535,12 @@ def main() -> None:
 
     metrics = _build_metrics(args.metrics)
     m_names = metric_names(metrics)
+    needs_chat_llm = metrics_need_chat_llm(metrics)
+    ctx_limit = int(args.context_max_chars)
+    ctx_max = ctx_limit if ctx_limit > 0 else None
 
     meta = {
-        "schema": "ragas_judge_scores_v2",
+        "schema": "ragas_judge_scores_v3",
         "framework": "ragas",
         "ragas_version": ragas_ver,
         "input_path": str(in_path.resolve()),
@@ -312,14 +548,30 @@ def main() -> None:
         "ground_truth_path": str(gt_path.resolve()) if gt_path else None,
         "ground_truth_sha256": gt_sha,
         "ground_truth_answer_is_llm_authored": True,
-        "llm_model": args.llm_model,
-        "embedding_model": args.embedding_model,
+        "ragas_provider": provider,
+        "llm_model": effective_llm,
+        "embedding_model": effective_emb,
+        "ollama_judge_chat_model_if_applicable": args.llm_model if provider == "ollama" else None,
+        "ollama_embedding_model_if_applicable": args.embedding_model if provider == "ollama" else None,
         "metrics_mode": args.metrics,
+        "metrics_needs_judge_chat_llm": needs_chat_llm,
         "metrics": m_names,
+        "evaluate_rows_per_batch": max(1, int(args.batch_size)),
+        "ragas_timeout_sec": args.ragas_timeout,
+        "ragas_max_retries": args.ragas_max_retries,
+        "ragas_max_workers": max(1, int(args.ragas_max_workers)),
+        "ollama_format_json": not args.ollama_plain_output,
+        "ollama_num_ctx": max(512, int(args.ollama_num_ctx)),
+        "ollama_num_predict": args.ollama_num_predict,
+        "context_max_chars": ctx_limit,
         "notes": (
-            "reference-based metrics use ground_truth_answer (LLM-authored, from GT file). "
-            "context_precision / context_recall / answer_correctness require that field or --ground-truth merge. "
-            "nv_context_relevance is the ContextRelevance metric name in ragas 0.4.x."
+            "metrics=local: answer_similarity + non_llm_context_precision_with_reference + "
+            "non_llm_context_recall (embedding + rapidfuzz; no judge chat). "
+            "Requires ground_truth_answer + non-empty reference_contexts per row. "
+            "Provider auto: picks gemini if GEMINI_API_KEY is set (.env OK), else Ollama. "
+            "metrics=minimal/full: use --provider gemini for reliable structured JSON judging, "
+            "or weaker Ollama chats may OutputParserException. "
+            "Default batch_size=1 and ragas_max_workers=1."
         ),
     }
     meta_path = out_path.with_suffix(out_path.suffix + ".meta.json")
@@ -339,19 +591,18 @@ def main() -> None:
 
     n_fail = 0
     n_skipped = 0
-    full_mode = args.metrics == "full"
+    need_reference_answer = args.metrics in ("full", "local")
 
     if pending:
-        llm = ChatOllama(model=args.llm_model, temperature=0.0)
-        emb = OllamaEmbeddings(model=args.embedding_model)
-        r_llm = LangchainLLMWrapper(llm)
-        r_emb = LangchainEmbeddingsWrapper(emb)
+        judge_llm = build_judge_chat(args, provider=provider) if needs_chat_llm else None
+        judge_emb = build_ragas_embeddings(args, provider=provider)
         run_cfg = RunConfig(
             timeout=args.ragas_timeout,
             max_retries=args.ragas_max_retries,
+            max_workers=max(1, int(args.ragas_max_workers)),
         )
 
-        chunk_size = args.batch_size or len(pending)
+        chunk_size = max(1, int(args.batch_size))
         with open(out_path, mode, encoding="utf-8") as fout:
             offset = 0
             while offset < len(pending):
@@ -361,7 +612,7 @@ def main() -> None:
                 skip_records: list[tuple[str, dict[str, Any], str]] = []
                 eval_slice: list[tuple[str, dict[str, Any]]] = []
                 for qid, row in batch:
-                    sr = _classify_skip(row, full=full_mode)
+                    sr = _classify_skip(row, metrics_mode=args.metrics)
                     if sr:
                         skip_records.append((qid, row, sr))
                     else:
@@ -378,8 +629,8 @@ def main() -> None:
                         "overall_score": overall,
                         "ragas_skip_reason": sr,
                         "ragas_version": ragas_ver,
-                        "llm_model": args.llm_model,
-                        "embedding_model": args.embedding_model,
+                        "llm_model": effective_llm,
+                        "embedding_model": effective_emb,
                     }
                     fout.write(json.dumps(out_rec, ensure_ascii=False) + "\n")
                     fout.flush()
@@ -395,26 +646,34 @@ def main() -> None:
                             _contexts_from_docs(
                                 r[1].get("retrieved_documents")
                                 if isinstance(r[1].get("retrieved_documents"), list)
-                                else []
+                                else [],
+                                max_chars=ctx_max,
                             )
                             for r in eval_slice
                         ],
                         "reference": [
-                            _reference_answer(r[1]) if full_mode else ""
+                            (_reference_answer(r[1]) if need_reference_answer else "")
+                            for r in eval_slice
+                        ],
+                        "reference_contexts": [
+                            (
+                                _truncate_context_list(_reference_contexts_list(r[1]), ctx_max)
+                                if args.metrics == "local"
+                                else []
+                            )
                             for r in eval_slice
                         ],
                     }
                 )
                 ev_kwargs: dict[str, Any] = {
                     "metrics": metrics,
-                    "llm": r_llm,
-                    "embeddings": r_emb,
+                    "embeddings": judge_emb,
                     "run_config": run_cfg,
                     "show_progress": True,
                     "raise_exceptions": args.debug_metrics,
                 }
-                if args.batch_size is not None:
-                    ev_kwargs["batch_size"] = args.batch_size
+                if needs_chat_llm:
+                    ev_kwargs["llm"] = judge_llm
                 ev = evaluate(ds, **ev_kwargs)
                 scores_list = ev.scores or []
 
@@ -431,8 +690,8 @@ def main() -> None:
                         "overall_score": overall,
                         "ragas_skip_reason": None,
                         "ragas_version": ragas_ver,
-                        "llm_model": args.llm_model,
-                        "embedding_model": args.embedding_model,
+                        "llm_model": effective_llm,
+                        "embedding_model": effective_emb,
                     }
                     fout.write(json.dumps(out_rec, ensure_ascii=False) + "\n")
                     fout.flush()
@@ -458,8 +717,9 @@ def main() -> None:
             "input_sha256": in_sha,
             "ground_truth_sha256": gt_sha,
             "ragas_version": ragas_ver,
-            "llm_model": args.llm_model,
-            "embedding_model": args.embedding_model,
+            "ragas_provider": provider,
+            "llm_model": effective_llm,
+            "embedding_model": effective_emb,
             "metrics_mode": args.metrics,
             "n_rows_output": len(all_rows),
             "metrics_all_nan_rows": n_fail,

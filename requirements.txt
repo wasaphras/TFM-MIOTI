@@ -8,6 +8,8 @@ langchain-community
 langchain-chroma
 langchain-text-splitters
 langchain-ollama
+langchain-google-genai
+python-dotenv
 chromadb
 rank_bm25
 sentence-transformers
@@ -16,4 +18,5 @@ fastapi
 uvicorn
 pydantic
 ragas==0.4.3
+rapidfuzz
 datasets
