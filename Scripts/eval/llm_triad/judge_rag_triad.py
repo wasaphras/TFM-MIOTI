@@ -42,11 +42,11 @@ from datasets import Dataset
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas import evaluate
 from ragas.metrics import (
+    AnswerRelevancy,
     ContextRelevance,
     NonLLMContextPrecisionWithReference,
     NonLLMContextRecall,
     answer_correctness,
-    answer_relevancy,
     answer_similarity,
     context_precision,
     context_recall,
@@ -103,6 +103,7 @@ def build_judge_chat_gemini(args: argparse.Namespace) -> Any:
         model=_resolve_gemini_chat_model(args),
         temperature=0.0,
         google_api_key=_gemini_api_key_or_raise(),
+        n=1,
     )
 
 
@@ -243,16 +244,21 @@ def augment_items_from_ground_truth(items: list[dict[str, Any]], gt_path: Path) 
             row["reference_contexts"] = [gs] if gs else []
 
 
-def _build_metrics(mode: str) -> list[Any]:
+def _build_metrics(
+    mode: str,
+    *,
+    answer_relevancy_strictness: int = 3,
+) -> list[Any]:
     if mode == "local":
         return [
             answer_similarity,
             NonLLMContextPrecisionWithReference(),
             NonLLMContextRecall(),
         ]
+    ar = AnswerRelevancy(strictness=max(1, int(answer_relevancy_strictness)))
     base: list[Any] = [
         faithfulness,
-        answer_relevancy,
+        ar,
         ContextRelevance(),
     ]
     if mode == "minimal":
@@ -501,6 +507,16 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--answer-relevancy-strictness",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Ragas answer_relevancy: number of generated questions per answer (default 3 on "
+            "Ollama, **1 on Gemini** — preview models reject multi-candidate API calls)."
+        ),
+    )
+    p.add_argument(
         "--debug-metrics",
         action="store_true",
         help="Pass raise_exceptions=True into ragas.evaluate",
@@ -511,6 +527,11 @@ def main() -> None:
     if provider == "gemini":
         _gemini_api_key_or_raise()
     effective_llm, effective_emb = resolve_effective_model_labels(args, provider=provider)
+
+    ar_strict = args.answer_relevancy_strictness
+    if ar_strict is None:
+        ar_strict = 1 if provider == "gemini" else 3
+    ar_strict = max(1, min(int(ar_strict), 10))
 
     in_path = Path(args.in_path)
     _, items = load_rag_artifact(in_path)
@@ -533,7 +554,7 @@ def main() -> None:
     except Exception:
         ragas_ver = "unknown"
 
-    metrics = _build_metrics(args.metrics)
+    metrics = _build_metrics(args.metrics, answer_relevancy_strictness=ar_strict)
     m_names = metric_names(metrics)
     needs_chat_llm = metrics_need_chat_llm(metrics)
     ctx_limit = int(args.context_max_chars)
@@ -564,6 +585,7 @@ def main() -> None:
         "ollama_num_ctx": max(512, int(args.ollama_num_ctx)),
         "ollama_num_predict": args.ollama_num_predict,
         "context_max_chars": ctx_limit,
+        "answer_relevancy_strictness": ar_strict,
         "notes": (
             "metrics=local: answer_similarity + non_llm_context_precision_with_reference + "
             "non_llm_context_recall (embedding + rapidfuzz; no judge chat). "
@@ -721,6 +743,7 @@ def main() -> None:
             "llm_model": effective_llm,
             "embedding_model": effective_emb,
             "metrics_mode": args.metrics,
+            "answer_relevancy_strictness": ar_strict,
             "n_rows_output": len(all_rows),
             "metrics_all_nan_rows": n_fail,
             "skipped_rows": n_skipped,
