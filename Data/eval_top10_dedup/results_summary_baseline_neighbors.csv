@@ -1,0 +1,11 @@
+eval_id,eval_label,chunk_strategy,retriever,hit_rate,mrr,n
+eval1_baseline,baseline_k20_dedup,len_1000_o100,hyb_rrf_k60_ce_r50,0.69,0.5497,100
+eval1_baseline,baseline_k20_dedup,len_1000_o100,hyb_rrf_k30_ce_r50,0.69,0.5497,100
+eval1_baseline,baseline_k20_dedup,len_1000_o100,hyb_rrf_fetch40_ce_r50,0.69,0.5497,100
+eval1_baseline,baseline_k20_dedup,len_1000_o100,hyb_weighted_norm_ce_r50,0.68,0.5346,100
+eval1_baseline,baseline_k20_dedup,len_1000_o100,hyb_interleave_ce_r50,0.69,0.5497,100
+eval1_baseline,baseline_k20_dedup,len_1500_o150,hyb_rrf_k60_ce_r50,0.7,0.5208,100
+eval1_baseline,baseline_k20_dedup,len_1500_o150,hyb_rrf_k30_ce_r50,0.7,0.5208,100
+eval1_baseline,baseline_k20_dedup,len_500_o50,hyb_fill_dense_then_bm25_ce_r50,0.77,0.6081,100
+eval1_baseline,baseline_k20_dedup,rec_nn_priority,hyb_fill_dense_then_bm25_ce_r50,0.67,0.5008,100
+eval1_baseline,baseline_k20_dedup,len_2000_o200,hyb_interleave,0.62,0.3128,100

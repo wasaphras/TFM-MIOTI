@@ -1,0 +1,6 @@
+chunk_strategy,hyb_rrf_k60_ce_r50,hyb_rrf_k30_ce_r50,hyb_rrf_fetch40_ce_r50,hyb_weighted_norm_ce_r50,hyb_interleave_ce_r50,hyb_fill_dense_then_bm25_ce_r50,hyb_interleave
+len_1000_o100,0.69,0.69,0.69,0.68,0.69,,
+len_1500_o150,0.7,0.7,,,,,
+len_500_o50,,,,,,0.77,
+rec_nn_priority,,,,,,0.67,
+len_2000_o200,,,,,,,0.62

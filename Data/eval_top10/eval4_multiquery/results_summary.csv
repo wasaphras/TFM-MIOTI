@@ -1,0 +1,11 @@
+chunk_strategy,retriever,hit_rate,mrr,n
+len_1000_o100,hyb_rrf_k60_ce_r50,0.43,0.2442,100
+len_1000_o100,hyb_rrf_k30_ce_r50,0.43,0.2442,100
+len_1000_o100,hyb_rrf_fetch40_ce_r50,0.43,0.2442,100
+len_1000_o100,hyb_weighted_norm_ce_r50,0.41,0.2261,100
+len_1000_o100,hyb_interleave_ce_r50,0.42,0.2342,100
+len_1500_o150,hyb_rrf_k60_ce_r50,0.39,0.2248,100
+len_1500_o150,hyb_rrf_k30_ce_r50,0.39,0.2248,100
+len_500_o50,hyb_fill_dense_then_bm25_ce_r50,0.34,0.2198,100
+rec_nn_priority,hyb_fill_dense_then_bm25_ce_r50,0.28,0.1536,100
+len_2000_o200,hyb_interleave_ce_r50,0.33,0.1906,100

@@ -1,0 +1,22 @@
+{
+  "len_1000_o100": {
+    "median_page_content_chars": 845.0,
+    "target_words": 140
+  },
+  "len_1500_o150": {
+    "median_page_content_chars": 1324.0,
+    "target_words": 220
+  },
+  "len_2000_o200": {
+    "median_page_content_chars": 1804.0,
+    "target_words": 250
+  },
+  "len_500_o50": {
+    "median_page_content_chars": 397.0,
+    "target_words": 66
+  },
+  "rec_nn_priority": {
+    "median_page_content_chars": 1803.0,
+    "target_words": 250
+  }
+}

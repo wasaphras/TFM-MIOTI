@@ -1,0 +1,21 @@
+{
+  "candidate_k": 100,
+  "chunk_strategy": "len_500_o50",
+  "eval_id_prefetch": "eval1_baseline",
+  "final_k": 20,
+  "generator_model": "llama3.2",
+  "generator_temperature": 0.0,
+  "ground_truth": "/home/mwc/Documents/MIOTI/Current/TFM/Data/ground_truth_dedup_top10_100.jsonl",
+  "ground_truth_sha256": "7c37962b422c8a5adc29955d62f48271929fe3ececd2660cc4d3f46f8585e2fa",
+  "live_queries": 0,
+  "manifest": "/home/mwc/Documents/MIOTI/Current/TFM/Data/eval_corpus_manifest_dedup.json",
+  "manifest_sha256": "ff190ce5ac1d351804d9091f055773a2286f8b4141c7e27dd97b6513ba1d55bb",
+  "n_queries_total": 100,
+  "notes": "Rows include ground_truth_answer from the GT file (`answer` field); it is LLM-authored, not independent human adjudication. reference_contexts is [gold_snippet] when present.",
+  "pairs_fingerprint": "a9b2947b2ec8262b2b0a54bf16babb2bc8812ce7e7ffcbb9aead4584a321a2ca",
+  "prefetch_queries": 100,
+  "prefetch_root": "/home/mwc/Documents/MIOTI/Current/TFM/Data/eval_top10_dedup/prefetch",
+  "retriever": "hyb_fill_dense_then_bm25_ce_r50",
+  "schema": "rag_responses_v2",
+  "system_prompt_sha256": "227f967f2d8147ab049bed86b3595468531e9a1caedf93c2edd0bf87c1d346c3"
+}

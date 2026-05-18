@@ -1,0 +1,45 @@
+{
+  "answer_relevancy_strictness": 1,
+  "embedding_model": "gemini-embedding-001",
+  "ground_truth_sha256": "7c37962b422c8a5adc29955d62f48271929fe3ececd2660cc4d3f46f8585e2fa",
+  "input_sha256": "90b137d58853f623757b486f55d75cc1eb2c8c97f218032251210b7ffe08847e",
+  "llm_model": "gemini-3.1-flash-lite-preview",
+  "metrics_all_nan_rows": 0,
+  "metrics_mode": "full",
+  "n_rows_output": 100,
+  "per_metric": {
+    "answer_correctness": {
+      "mean": 0.309514,
+      "n_non_nan": 100,
+      "stdev": 0.184222
+    },
+    "answer_relevancy": {
+      "mean": 0.461891,
+      "n_non_nan": 100,
+      "stdev": 0.430037
+    },
+    "context_precision": {
+      "mean": 0.665745,
+      "n_non_nan": 100,
+      "stdev": 0.382584
+    },
+    "context_recall": {
+      "mean": 0.825,
+      "n_non_nan": 100,
+      "stdev": 0.378561
+    },
+    "faithfulness": {
+      "mean": 0.540045,
+      "n_non_nan": 100,
+      "stdev": 0.404053
+    },
+    "nv_context_relevance": {
+      "mean": 0.94,
+      "n_non_nan": 100,
+      "stdev": 0.210579
+    }
+  },
+  "ragas_provider": "gemini",
+  "ragas_version": "0.4.3",
+  "skipped_rows": 0
+}
