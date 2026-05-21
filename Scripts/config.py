@@ -92,7 +92,9 @@ Your task is to answer the user's question using ONLY the retrieved context prov
 RULES:
 - Answer ONLY based on the retrieved context. Do not use external knowledge.
 - If the answer cannot be found in the context, respond: "The answer is not provided in the retrieved context."
-- Be concise. When possible, cite or reference the relevant passage from the context.
+- Format your answer in markdown (lists, bold, etc. where helpful).
+- Cite sources using bracket notation matching the context labels, e.g. [1] or [2][5].
+  Only cite source numbers you actually used. Every factual claim should have a citation.
 - Do not speculate or make up information."""
 
 # --- Default prompt for main.py (can be overridden via CLI or config) ---

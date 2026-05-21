@@ -109,11 +109,9 @@ def unload_cross_encoder() -> None:
         pass
 
 
-def rerank_documents(
-    query: str, docs: list[Document], top_n: int
-) -> list[Document]:
-    """Score (query, chunk) pairs; return up to top_n documents by descending score."""
-    if not docs or top_n <= 0:
+def _predict_rerank_scores(query: str, docs: list[Document]) -> list[float]:
+    """Cross-encoder scores for (query, passage) pairs; same order as ``docs``."""
+    if not docs:
         return []
     max_chars = config.RERANK_PASSAGE_MAX_CHARS
     model = get_cross_encoder()
@@ -124,14 +122,37 @@ def rerank_documents(
             text = text[:max_chars]
         pairs.append([query, text])
     bs = max(1, int(config.RERANK_PREDICT_BATCH_SIZE))
-    scores = model.predict(
+    raw = model.predict(
         pairs,
         show_progress_bar=False,
         convert_to_numpy=True,
         batch_size=bs,
     )
-    order = sorted(range(len(docs)), key=lambda i: float(scores[i]), reverse=True)
-    return [docs[i] for i in order[:top_n]]
+    return [float(raw[i]) for i in range(len(docs))]
+
+
+def rerank_documents_with_scores(
+    query: str, docs: list[Document], top_n: int
+) -> list[tuple[Document, float]]:
+    """Rerank by CE score; attach ``rerank_score`` to each returned document metadata."""
+    if not docs or top_n <= 0:
+        return []
+    scores = _predict_rerank_scores(query, docs)
+    order = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)
+    out: list[tuple[Document, float]] = []
+    for i in order[:top_n]:
+        d = docs[i]
+        meta = dict(d.metadata or {})
+        meta["rerank_score"] = scores[i]
+        out.append((Document(page_content=d.page_content, metadata=meta), scores[i]))
+    return out
+
+
+def rerank_documents(
+    query: str, docs: list[Document], top_n: int
+) -> list[Document]:
+    """Score (query, chunk) pairs; return up to top_n documents by descending score."""
+    return [d for d, _ in rerank_documents_with_scores(query, docs, top_n)]
 
 
 def reset_cross_encoder_for_tests() -> None:

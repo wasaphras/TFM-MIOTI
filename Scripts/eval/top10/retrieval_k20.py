@@ -5,7 +5,7 @@ from __future__ import annotations
 from langchain_core.documents import Document
 
 from ... import config
-from ..rerank_cross_encoder import rerank_documents
+from ..rerank_cross_encoder import rerank_documents, rerank_documents_with_scores
 from ..retrieval_strategies import (
     RERANK_SUFFIX,
     RetrievalContext,
@@ -22,6 +22,7 @@ def run_retriever_k(
     *,
     final_k: int = 20,
     candidate_k: int | None = None,
+    attach_rerank_scores: bool = False,
 ) -> list[Document]:
     """
     Run base retriever with ``candidate_k`` breadth, dedupe, optional CE rerank to ``final_k``.
@@ -37,6 +38,8 @@ def run_retriever_k(
     if name.endswith(RERANK_SUFFIX):
         if not unique:
             docs: list[Document] = []
+        elif attach_rerank_scores:
+            docs = [d for d, _ in rerank_documents_with_scores(query, unique, top_n=final_k)]
         else:
             docs = rerank_documents(query, unique, top_n=final_k)
         docs = _pad_to_k(docs, ctx, query, final_k)

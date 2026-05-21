@@ -105,3 +105,8 @@ Data/chunks.jsonl
 
 # Logs (if you add file logging under the repo)
 *.log
+
+# Webapp (Vite)
+webapp/node_modules/
+webapp/dist/
+webapp/.env

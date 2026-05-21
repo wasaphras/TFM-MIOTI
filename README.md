@@ -443,7 +443,9 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `Scripts/embeddings_chromadb.py`        | Ollama embed -> Chroma                                          |
 | `Scripts/retriever.py`                  | Dense retrieve + RAG answer                                     |
 | `Scripts/main.py`                       | End-to-end demo pipeline                                        |
-| `Scripts/api.py`                        | FastAPI `/chat`                                                 |
+| `Scripts/api.py`                        | FastAPI `/chat/stream` (SSE) + `/health`                          |
+| `Scripts/rag_chat_service.py`           | Dedup RAG retrieval + Gemini streaming for webapp                 |
+| `webapp/`                               | Vite + React chat UI                                            |
 | `Scripts/eval/build_chunk_indices_dedup.py` | Dedup index filter (streams standard chunk files → dedup paths) |
 | `Scripts/eval/ground_truth_generate_dedup.py` | Dedup ground-truth builder                          |
 | `Scripts/eval/merge_top10_summaries_dedup.py` | Merge dedup baseline + neighbors summaries           |
@@ -471,7 +473,7 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `python -m Scripts.eval.run_grid_eval`                                   | Run grid (**default: all 20 retrievers**); writes `Data/eval/*.csv` when complete |
 | `python -m Scripts.eval.run_grid_eval --limit-queries 100`               | Use first 100 rows of GT (if file has more)            |
 | `python -m Scripts.main`                                                 | RAG answer one prompt                                  |
-| `python -m Scripts.api`                                                  | Start API server                                       |
+| `python -m Scripts.api`                                                  | Start RAG chat API (dedup stack + Gemini streaming)    |
 | `python -m Scripts.embeddings_chromadb`                                  | Dev: chunk + embed default Chroma                      |
 | `python -m Scripts.chunking`                                             | Dev: default chunker -> `chunks.jsonl`                 |
 | `python -m Scripts.eval.build_chunk_indices_dedup --top10`               | Dedup chunk JSONLs + Chroma (filter from standard artifacts) |
@@ -548,14 +550,82 @@ If you see errors like **Failed to apply logs to the hnsw segment writer**: (1) 
 
 ---
 
+## Webapp (Vite + React chat UI)
+
+ChatGPT-style UI in [`webapp/`](webapp/) against the **dedup eval winner**: `len_500_o50` + `hyb_fill_dense_then_bm25_ce_r50` (k=20, candidate 100), Ollama `qwen3-embedding:4b` for retrieval, **Gemini** for streamed answers.
+
+### Prerequisites
+
+1. Steps **1–2** and dedup indices: `python -m Scripts.eval.build_chunk_indices_dedup --top10` (needs `Data/chroma_chunk_dedup_len_500_o50/` and `Data/chunks_dedup_len_500_o50.jsonl`).
+2. `ollama pull qwen3-embedding:4b` (Ollama running).
+3. Copy [`.env.example`](.env.example) to `.env` at the project root and set `GEMINI_API_KEY` (never commit `.env`).
+
+### Run (three services: Ollama + API + UI)
+
+You need **both** Ollama (embeddings at query time) **and** the FastAPI backend (retrieval + Gemini). `ollama serve` alone will still show **Failed to fetch** in the browser.
+
+**Terminal 1 — Ollama** (if not already running):
+
+```bash
+ollama serve
+```
+
+**Terminal 2 — API** (from project root; use the conda env that has `requirements.txt` installed):
+
+```bash
+conda run -n Data --no-capture-output python -m Scripts.api
+# or: python -m Scripts.api   # when your active env already has fastapi, chromadb, etc.
+```
+
+Wait until you see `RAG chat service ready` and `Uvicorn running on http://0.0.0.0:8000`. Check: `curl http://localhost:8000/health` → `{"status":"ok"}`.
+
+**Terminal 3 — UI:**
+
+```bash
+cd webapp
+cp .env.example .env   # optional: VITE_API_BASE_URL=http://localhost:8000
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. Answers render as markdown; **Sources** are grouped by CELEX document with EUR-Lex links and expandable full-document previews, plus per-chunk excerpts.
+
+**`POST /chat/stream` body:** `{ "query": "...", "history": [{ "user": "...", "assistant": "...", "context_chunks": [{ "chunk_uid", "celex_id", "categories_en", "text" }] }] }`. Retrieval uses `query` only; prior turns (user + cited chunks + assistant) are injected before the LLM. SSE events: `sources` (document-grouped JSON), `token`, `done` (`used_chunk_uids`, `context_chunks`), `error`.
+
+### Verify
+
+| Check | Expected |
+| ----- | -------- |
+| `GET http://localhost:8000/health` | `{"status":"ok"}` |
+| Ask a legislation question | Streamed markdown answer; sources grouped by CELEX with `eurlex_url` |
+| Missing `GEMINI_API_KEY` | SSE `error` event pointing to `.env` |
+| Missing dedup Chroma | API fails at startup with path + `build_chunk_indices_dedup` hint |
+
+Optional env: `RAG_CHUNK_STRATEGY`, `RAG_RETRIEVER`, `RAG_FINAL_K`, `RAG_CANDIDATE_K`, `GEMINI_MODEL`, `CORS_ORIGINS` (see `.env.example`).
+
+### Webapp: "Failed to fetch"
+
+| Cause | Fix |
+| ----- | --- |
+| API not running | Start `python -m Scripts.api` (see above); verify `curl http://localhost:8000/health` |
+| Wrong Python env | `ModuleNotFoundError: fastapi` → use `conda run -n Data python -m Scripts.api` |
+| Wrong `VITE_API_BASE_URL` | `webapp/.env` should be `http://localhost:8000` (restart `npm run dev` after edits) |
+| GPU OOM on first question | Add to root `.env`: `RERANK_DEVICE=cpu` and restart API |
+
+---
+
 ## Environment variables
 
 
 | Variable                   | Used for                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------- |
 | `HF_TOKEN`                 | `huggingface_hub` download in `data_extraction_load`                                               |
-| `GEMINI_API_KEY`           | Loaded from project `.env`; enables **Gemini** for `judge_rag_triad` when `--provider` is gemini/auto |
-| `GEMINI_MODEL`             | Gemini chat ID for Ragas judge (minimal/full); default in code `gemini-2.0-flash` if unset |
+| `GEMINI_API_KEY`           | Loaded from project `.env`; **webapp chat API** + `judge_rag_triad` when `--provider` is gemini/auto |
+| `GEMINI_MODEL`             | Gemini chat for webapp + Ragas judge; default `gemini-2.0-flash` if unset |
+| `RAG_CHUNK_STRATEGY`       | Webapp retrieval chunk id (default `len_500_o50`) |
+| `RAG_RETRIEVER`            | Webapp retriever id (default `hyb_fill_dense_then_bm25_ce_r50`) |
+| `RAG_FINAL_K` / `RAG_CANDIDATE_K` | Webapp top-k after rerank / candidate pool (default 20 / 100) |
+| `CORS_ORIGINS`             | Comma-separated origins for FastAPI CORS (default `http://localhost:5173`) |
 | `GEMINI_EMBEDDING_MODEL`    | Gemini embedding ID (local + embedding metrics); default `gemini-embedding-001` if unset |
 | `RERANK_MODEL`             | Cross-encoder checkpoint ID (default: `BAAI/bge-reranker-v2-m3`)                                   |
 | `RERANK_DEVICE`            | `cpu` or `cuda` / `cuda:0` to pin the reranker; if unset, tries CUDA then falls back to CPU on OOM |
