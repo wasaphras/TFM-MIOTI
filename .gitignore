@@ -81,6 +81,12 @@ Data/**/prefetch/
 # Optional single-file chunk dump used by the main pipeline (CHUNKS_JSONL)
 Data/chunks.jsonl
 
+# Local video (GitHub 100 MB file limit)
+*.mp4
+*.mov
+*.mkv
+*.avi
+
 # Heavy binary / model / archive artifacts
 *.7z
 *.arrow
