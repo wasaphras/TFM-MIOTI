@@ -127,7 +127,8 @@ if [[ "$SKIP_RAGAS" -eq 0 ]]; then
     --in "$RAGAS_OUT/rag_responses.jsonl" \
     --out "$RAGAS_OUT/ragas_scores.jsonl" \
     --ground-truth "$TFM_DATA_DIR/ground_truth_dedup_top10_100.jsonl" \
-    --limit-queries 2
+    --limit-queries 2 \
+    --provider ollama
 else
   echo "Skipping Ragas (--skip-ragas)"
 fi

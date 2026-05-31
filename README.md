@@ -16,17 +16,26 @@ Python pipeline to download English EU-law documents from [MultiEURLEX](https://
 **Lean** is for clones, reviewers, and CI: prebuilt Chroma (~2 MB per strategy), no Hugging Face download.  
 **Full** is for thesis-scale results: download MultiEURLEX, build indices locally, run the experiments in README Steps 1-6.
 
+**Before you run** (both lean and full — steps 1–4 required for `./run_lean.sh` and `./run_full.sh`; `--verify` does not check them):
+
+1. **Python 3.11+** — create and activate a venv or conda env (e.g. `conda activate Data` if that env exists).
+2. **`pip install -r requirements.txt`** — not validated by `--verify`.
+3. **Ollama daemon** — in a separate terminal: `ollama serve` (embed, index, ground-truth, Ragas generation, and dedup prefetch all call Ollama APIs).
+4. **Model pulls** — `ollama pull qwen3-embedding:4b` and `ollama pull llama3.2`.
+5. **Optional `PYTHON=`** — when `python` on PATH is wrong:
+
 ```bash
-# One-time setup (both modes)
-pip install -r requirements.txt
-ollama pull qwen3-embedding:4b
-ollama pull llama3.2
+export PYTHON=/path/to/python3.11          # or: PYTHON=... ./run_lean.sh
+# conda alternative (matches dedup driver / webapp):
+export PYTHON="conda run -n Data --no-capture-output python"
+```
 
-# Lean: verify the whole stack on the small fixture (~1-2 h on CPU rerank)
-./run_lean.sh --skip-ragas
-./run_lean.sh --verify          # seconds: fixture files + sizes only
+```bash
+# Lean: fixture check, then full pipeline (~1–2 h on CPU rerank)
+./run_lean.sh --verify          # fixture integrity only — NOT pip/Ollama/deps
+./run_lean.sh --skip-ragas      # omit --skip-ragas to include Ollama-only Ragas
 
-# Full: one step at a time (see also ./run_full.sh plan)
+# Full: one step at a time (see also ./run_full.sh plan; needs steps 1–4 above)
 export HF_TOKEN=your_token      # first download only
 ./run_full.sh ingest
 ./run_full.sh index             # slow
@@ -351,13 +360,27 @@ python -m Scripts.eval.run_grid_eval \
 | Grid | 3 retrievers x 10 strategies x 2 GT (`--full-grid` for 20 retrievers, 200 summary rows) |
 | Top-10 | Evals 1-4 |
 | Dedup | Eval1 + eval2 + merge (8-doc dedup subset) |
-| Ragas | On unless `--skip-ragas` |
+| Ragas | On unless `--skip-ragas` (Ollama-only judge via `--provider ollama`; see below) |
 
 Rebuild fixture: `python tests/build_fixture.py` (needs local `Data/train.jsonl` + Ollama).
+
+**Lean Ragas (no Gemini API key):** Step A (`generate_rag_responses`) always uses Ollama. The smoke test calls Step B with **`--provider ollama`** so lean stays local even if `.env` has `GEMINI_API_KEY`. Default **`--metrics local`** needs embeddings only (no judge chat JSON). For manual runs after `./run_lean.sh --skip-ragas`:
+
+```bash
+python -m Scripts.eval.llm_triad.judge_rag_triad \
+  --in tests/fixture/Data/eval_top10_dedup/llm_triad_len500_hyb_fill/rag_responses.jsonl \
+  --out tests/fixture/Data/eval_top10_dedup/llm_triad_len500_hyb_fill/ragas_scores.jsonl \
+  --ground-truth tests/fixture/Data/ground_truth_dedup_top10_100.jsonl \
+  --provider ollama --limit-queries 2
+```
+
+For thesis-scale Ragas with Gemini, set `.env` and use **`--provider gemini`** on manual judge runs (see full-mode section below).
 
 ---
 
 ### Ragas evaluation (two-phase LLM triad on the dedup corpus)
+
+For lean fixture paths, substitute `tests/fixture/Data/...` for `Data/...` and prefer **`--provider ollama`** when you have no API key.
 
 This complements hit-rate / MRR with **Ragas** scores on the retrieval + generation pipeline. Defaults target the **best cell** observed in dedup baseline eval (`len_500_o50`, `hyb_fill_dense_then_bm25_ce_r50`, top **20** after cross-encoder rerank, candidate breadth 100)—see `Data/eval_top10_dedup/eval1_baseline/results_summary.csv`.
 
@@ -419,8 +442,8 @@ python run_api.py   # or: python -m Scripts.api
 
 | Requirement                | Notes                                                                                                                                |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **Conda / Python**       | Recommend **Python 3.11+**. Install deps: `pip install -r requirements.txt` (includes LangChain stack, **chromadb**, **rank_bm25**, **sentence-transformers** → typically pulls **PyTorch** for CUDA/CPU reranking, **ragas==0.4.3**, **rapidfuzz** for non-LLM Ragas distances, **datasets**, **python-dotenv**, **langchain-google-genai**) |
-| **Ollama**                 | Pull embedding + chat models: see Step 0 above                                                                                       |
+| **Conda / Python**       | **Python 3.11+** — activate your env before `pip install -r requirements.txt` (includes LangChain stack, **chromadb**, **rank_bm25**, **sentence-transformers** → typically pulls **PyTorch** for CUDA/CPU reranking, **ragas==0.4.3**, **rapidfuzz** for non-LLM Ragas distances, **datasets**, **python-dotenv**, **langchain-google-genai**). Override interpreter: `export PYTHON=/path/to/python` or `PYTHON=... ./run_lean.sh`. Conda env **`Data`** (if present) is used automatically by [`Scripts/eval/run_dedup_top10_evals.sh`](Scripts/eval/run_dedup_top10_evals.sh); for lean/full entry points set `PYTHON` as in the quick-start above. |
+| **Ollama**                 | **`ollama serve` must be running** during pipeline steps (not just `ollama pull`). Pull embedding + chat models: see Step 0 above. Same command as the [webapp](#webapp-vite--react-chat-ui) section. |
 | **GPU (optional)**         | Recommended for the full 10×20 eval with default reranker `BAAI/bge-reranker-v2-m3`; CPU works but is slower                         |
 | **HF_TOKEN**               | Hugging Face token (env var read by `config.py`). **Do not commit tokens.** Needed when Step 1 must download the dataset tarball if `Data/train.jsonl` is missing. The downloader also mentions `HUGGINGFACE_HUB_TOKEN` in its warning text; either can satisfy the Hub depending on library behavior, but this repo passes `HF_TOKEN` explicitly. |
 | **Data/categories.json**   | EuroVOC id-to-labels map (required for `preprocess_for_rag`)                                                                          |

@@ -23,7 +23,7 @@ Lean mode (default for clones and CI)
 
 Commands:
   ./run_lean.sh              Run full lean pipeline check (smoke test)
-  ./run_lean.sh --verify     Only validate_fixture + file sanity (seconds)
+  ./run_lean.sh --verify     Fixture files/sizes only (not pip or Ollama)
   ./run_lean.sh --rebuild    Rebuild fixture from Data/train.jsonl, then smoke test
   ./run_lean.sh --full-grid  Smoke test with 20 retrievers (200-row grid summary)
   ./run_lean.sh --skip-ragas Skip Ragas judge stage
