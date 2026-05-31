@@ -9,24 +9,25 @@
 - [ ] `docs/REPRODUCING_RESULTS.md` - maps committed CSVs to experiments
 - [ ] `tests/fixture/Data/` committed (~32 MB, 10-doc Chroma ~2 MB each)
 
-## Verify without full MultiEURLEX download
+## Lean mode (10 docs, 2 GT, no download)
 
 ```bash
 pip install -r requirements.txt
 ollama pull qwen3-embedding:4b
-python tests/validate_fixture.py
-bash tests/run_smoke_test.sh --skip-ragas
+./run_lean.sh --verify
+./run_lean.sh --skip-ragas
 ```
 
-Expected: `validate_fixture.py` prints OK; smoke test ends with `7 passed, 0 failed` (Ragas optional).
+Expected: `Lean verify OK`; smoke test ends with `8 passed, 0 failed` (Ragas optional).
 
-## Full thesis corpus (local only, gitignored)
+## Full mode (thesis corpus, local Data/)
 
 ```bash
 export HF_TOKEN=...
-python -m Scripts.data_extraction_load
-python -m Scripts.eval.build_chunk_indices --all
-# ... see README.md Steps 3-6
+./run_full.sh plan
+./run_full.sh ingest
+./run_full.sh index
+# ... see README.md Steps 3-6 or run_full.sh help
 ```
 
 ## Common mistakes

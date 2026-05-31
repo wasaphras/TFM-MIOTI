@@ -6,7 +6,39 @@ Python pipeline to download English EU-law documents from [MultiEURLEX](https://
 
 ---
 
-## How to run -- exact commands, step by step
+## Two ways to run
+
+| Mode | Corpus | Ground truth | Data directory | Entry point |
+|------|--------|--------------|----------------|-------------|
+| **Lean** | **10** docs (in git) | **2** questions | `tests/fixture/Data/` | [`./run_lean.sh`](run_lean.sh) |
+| **Full** | **~55 000** docs (download) | **100** questions (typical) | `Data/` (gitignored) | [`./run_full.sh`](run_full.sh) |
+
+**Lean** is for clones, reviewers, and CI: prebuilt Chroma (~2 MB per strategy), no Hugging Face download.  
+**Full** is for thesis-scale results: download MultiEURLEX, build indices locally, run the experiments in README Steps 1-6.
+
+```bash
+# One-time setup (both modes)
+pip install -r requirements.txt
+ollama pull qwen3-embedding:4b
+ollama pull llama3.2
+
+# Lean: verify the whole stack on the small fixture (~1-2 h on CPU rerank)
+./run_lean.sh --skip-ragas
+./run_lean.sh --verify          # seconds: fixture files + sizes only
+
+# Full: one step at a time (see also ./run_full.sh plan)
+export HF_TOKEN=your_token      # first download only
+./run_full.sh ingest
+./run_full.sh index             # slow
+./run_full.sh ground-truth
+./run_full.sh grid
+```
+
+Lean mode sets `TFM_DATA_DIR` to the fixture. Full mode uses default `Data/` (unset `TFM_DATA_DIR`). See [docs/DELIVERY_CHECKLIST.md](docs/DELIVERY_CHECKLIST.md).
+
+---
+
+## How to run -- exact commands, step by step (full mode)
 
 > **All commands run from the project root (`TFM/`).** The steps must be executed **in order**.
 >
@@ -310,29 +342,18 @@ python -m Scripts.eval.run_grid_eval \
     hyb_interleave hyb_fill_dense_then_bm25
 ```
 
-### Smoke test (committed 10-doc fixture, 2 GT questions)
+### Lean mode details
 
-The repo ships a small prebuilt corpus under [`tests/fixture/Data/`](tests/fixture/Data/) (tracked in git). It runs the same pipeline as production with **10 documents** and **2** ground-truth rows:
+[`./run_lean.sh`](run_lean.sh) sets `TFM_DATA_DIR=tests/fixture/Data` and runs the same eval stages as full mode on **10 documents** and **2** ground-truth rows. See [`tests/fixture/README.md`](tests/fixture/README.md).
 
-- 200-row grid: 10 chunk strategies x 20 retrievers x 2 questions
-- Top-10 evals 1-4 (k=20)
-- Dedup eval1 + eval2 + merge
-- Ragas replay + judge (unless `--skip-ragas`)
+| Stage | Lean default |
+|-------|----------------|
+| Grid | 3 retrievers x 10 strategies x 2 GT (`--full-grid` for 20 retrievers, 200 summary rows) |
+| Top-10 | Evals 1-4 |
+| Dedup | Eval1 + eval2 + merge (8-doc dedup subset) |
+| Ragas | On unless `--skip-ragas` |
 
-```bash
-# Rebuild fixture from full Data/ (needs Ollama + ../../Data/train.jsonl):
-# conda run -n Data --no-capture-output python tests/build_fixture.py
-
-bash tests/run_smoke_test.sh
-# bash tests/run_smoke_test.sh --full-grid  # 10 x 20 retrievers x 2 GT (slow on CPU rerank)
-# bash tests/run_smoke_test.sh --skip-ragas # omit Gemini/Ollama Ragas judge
-```
-
-Uses `TFM_DATA_DIR=tests/fixture/Data` and `TFM_CATEGORIES_JSON=Data/categories.json` by default. See [`tests/fixture/README.md`](tests/fixture/README.md) and [`docs/DELIVERY_CHECKLIST.md`](docs/DELIVERY_CHECKLIST.md).
-
-```bash
-python tests/validate_fixture.py   # 10 docs, Chroma ~2 MB each (not 15 GB)
-```
+Rebuild fixture: `python tests/build_fixture.py` (needs local `Data/train.jsonl` + Ollama).
 
 ---
 

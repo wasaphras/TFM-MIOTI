@@ -89,8 +89,10 @@ Pair definitions for top-10-style evals live in [`Scripts/eval/top10/pairs.py`](
 | `run_api.py` | Thin wrapper: starts `Scripts.api`. |
 | `Scripts/` | All application code (modules run as `python -m Scripts….`). |
 | `Data/` | Dataset, indices, manifests, ground truth, eval outputs (many paths gitignored — see README). |
+| `run_lean.sh` | Lean mode: `TFM_DATA_DIR=tests/fixture/Data`, 10 docs, 2 GT. |
+| `run_full.sh` | Full mode: `Data/`, stepwise thesis pipeline. |
 | `tests/fixture/Data/` | Committed 10-doc smoke corpus (override with `TFM_DATA_DIR`). |
-| `tests/run_smoke_test.sh` | End-to-end smoke orchestrator. |
+| `tests/run_smoke_test.sh` | Lean eval orchestrator (called by `run_lean.sh`). |
 | `docs/` | Deep documentation (this guide). |
 
 ### Corpus layouts (`Scripts/eval/corpus_layout.py`)
