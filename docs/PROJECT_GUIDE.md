@@ -89,7 +89,22 @@ Pair definitions for top-10-style evals live in [`Scripts/eval/top10/pairs.py`](
 | `run_api.py` | Thin wrapper: starts `Scripts.api`. |
 | `Scripts/` | All application code (modules run as `python -m Scripts….`). |
 | `Data/` | Dataset, indices, manifests, ground truth, eval outputs (many paths gitignored — see README). |
+| `tests/fixture/Data/` | Committed 10-doc smoke corpus (override with `TFM_DATA_DIR`). |
+| `tests/run_smoke_test.sh` | End-to-end smoke orchestrator. |
 | `docs/` | Deep documentation (this guide). |
+
+### Corpus layouts (`Scripts/eval/corpus_layout.py`)
+
+Standard and dedup tracks share one eval engine; paths differ by `CorpusLayout`:
+
+| Instance | Chunks | Chroma | Manifest | Top-10 root |
+|----------|--------|--------|----------|-------------|
+| `STANDARD` | `chunks_<id>.jsonl` | `chroma_chunk_<id>/` | `eval_corpus_manifest.json` | `eval_top10/` |
+| `DEDUP` | `chunks_dedup_<id>.jsonl` | `chroma_chunk_dedup_<id>/` | `eval_corpus_manifest_dedup.json` | `eval_top10_dedup/` |
+
+[`dedup_paths.py`](../Scripts/eval/top10/dedup_paths.py) re-exports `DEDUP` paths. [`_engine_dedup.py`](../Scripts/eval/top10/_engine_dedup.py), [`neighbor_index_dedup.py`](../Scripts/eval/top10/neighbor_index_dedup.py), and [`merge_top10_summaries_dedup.py`](../Scripts/eval/merge_top10_summaries_dedup.py) are thin wrappers over shared modules.
+
+Set `TFM_DATA_DIR` to point at `tests/fixture/Data` for smoke runs without touching the full corpus.
 
 ---
 
@@ -144,7 +159,10 @@ Typical filenames: `rag_responses.jsonl`, `rag_responses.jsonl.meta.json`, `raga
 
 | File | Purpose |
 |------|---------|
-| [`config.py`](../Scripts/config.py) | Central paths (`DATA_DIR`), `DOC_LIMIT`, Ollama model names, `RETRIEVAL_CANDIDATE_K`, rerank env defaults, system prompt text. |
+| [`config.py`](../Scripts/config.py) | `DATA_DIR` (`TFM_DATA_DIR`), `CATEGORIES_JSON`, `DOC_LIMIT` (default 55000), models, rerank env, system prompt. |
+| [`eval/corpus_layout.py`](../Scripts/eval/corpus_layout.py) | `STANDARD` / `DEDUP` path bundles for both eval tracks. |
+| [`eval/copy_corpus_subset.py`](../Scripts/eval/copy_corpus_subset.py) | Filter chunks+Chroma from a source `Data/` tree into `DATA_DIR`. |
+| [`eval/merge_summaries.py`](../Scripts/eval/merge_summaries.py) | Shared CSV merge for top-10 eval summaries. |
 | [`data_extraction_load.py`](../Scripts/data_extraction_load.py) | Download / extract MultiEURLEX; writes `train.jsonl` (+ metadata). Uses `HF_TOKEN`. |
 | [`preprocess.py`](../Scripts/preprocess.py) | `preprocess_for_rag`: merges EuroVOC labels from `categories.json`. |
 | [`chunking_strategies.py`](../Scripts/chunking_strategies.py) | IDs for the **10** strategies, persistence path helpers (`chroma_persist_dir`). |

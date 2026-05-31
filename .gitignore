@@ -106,6 +106,10 @@ Data/chunks.jsonl
 # Logs (if you add file logging under the repo)
 *.log
 
+# Committed smoke-test fixture (small; tracked despite patterns above)
+!tests/fixture/
+!tests/fixture/**
+
 # Webapp (Vite)
 webapp/node_modules/
 webapp/dist/

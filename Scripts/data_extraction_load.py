@@ -29,10 +29,7 @@ def extract_and_download() -> None:
         return
 
     if not config.HF_TOKEN:
-        print(
-            "Note: HUGGINGFACE_HUB_TOKEN or HF_TOKEN is not set. "
-            "Set it if Hugging Face download fails."
-        )
+        print("HF_TOKEN is not set; set it if Hugging Face download fails.")
 
     print("Downloading MultiEURLEX archive from Hugging Face...")
     from huggingface_hub import hf_hub_download

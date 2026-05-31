@@ -1,0 +1,66 @@
+{
+  "celex_ids": [
+    "31997R2316",
+    "32009R0295",
+    "32000L0081",
+    "32005R1410",
+    "32005L0052",
+    "31990L0476",
+    "32009R0536",
+    "31983D0268"
+  ],
+  "n_docs": 8,
+  "source_train_jsonl": "/home/mwc/Documents/MIOTI/Current/TFM/tests/fixture/Data/train_dedup.jsonl",
+  "source_train_sha256": "08a724b5afa40ba0919828c4239534af641f1b0338e2335b307e979a49253d02",
+  "created_utc": "2026-05-31T14:21:54.023878+00:00",
+  "strategies": [
+    "len_1000_o100",
+    "len_1500_o150",
+    "len_500_o50",
+    "rec_nn_priority",
+    "len_2000_o200"
+  ],
+  "per_strategy": [
+    {
+      "strategy_id": "len_1000_o100",
+      "skipped": 0,
+      "dedup_jsonl_n": 46,
+      "source_jsonl_n": 52,
+      "dropped_chunks": 6,
+      "chroma_deleted_rows": 6
+    },
+    {
+      "strategy_id": "len_1500_o150",
+      "skipped": 0,
+      "dedup_jsonl_n": 28,
+      "source_jsonl_n": 32,
+      "dropped_chunks": 4,
+      "chroma_deleted_rows": 4
+    },
+    {
+      "strategy_id": "len_500_o50",
+      "skipped": 0,
+      "dedup_jsonl_n": 98,
+      "source_jsonl_n": 113,
+      "dropped_chunks": 15,
+      "chroma_deleted_rows": 15
+    },
+    {
+      "strategy_id": "rec_nn_priority",
+      "skipped": 0,
+      "dedup_jsonl_n": 21,
+      "source_jsonl_n": 24,
+      "dropped_chunks": 3,
+      "chroma_deleted_rows": 3
+    },
+    {
+      "strategy_id": "len_2000_o200",
+      "skipped": 0,
+      "dedup_jsonl_n": 22,
+      "source_jsonl_n": 25,
+      "dropped_chunks": 3,
+      "chroma_deleted_rows": 3
+    }
+  ],
+  "method": "filtered_existing_chunks_and_chroma_no_reembedding"
+}

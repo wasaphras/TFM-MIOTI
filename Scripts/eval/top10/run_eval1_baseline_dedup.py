@@ -21,10 +21,10 @@ DEFAULT_PREFETCH_DIR = DEDUP_EVAL_ROOT / "prefetch"
 _DEDUP_PREFETCH_EPILOG = """
 Two-phase run (same pattern as non-dedup top-10; avoids holding Chroma + cross-encoder on GPU):
 
-  Phase 1 — embeddings + Chroma + BM25 only (no cross-encoder):
+  Phase 1 - embeddings + Chroma + BM25 only (no cross-encoder):
     EVAL_CUDA_EMPTY_CACHE=1 python -m Scripts.eval.top10.run_eval1_baseline_dedup --prefetch-write
 
-  Phase 2 — load saved candidates; cross-encoder rerank only (no Chroma):
+  Phase 2 - load saved candidates; cross-encoder rerank only (no Chroma):
     EVAL_CUDA_EMPTY_CACHE=1 python -m Scripts.eval.top10.run_eval1_baseline_dedup --prefetch-read
 
   Re-run the same command to resume. Use --no-resume-prefetch to wipe prefetch/eval1_baseline/.

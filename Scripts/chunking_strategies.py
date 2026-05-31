@@ -1,9 +1,4 @@
-"""
-Ten chunking strategies for RAG evaluation (plan Part C).
-
-Five length-first (RecursiveCharacter, chunk_size ≤ 2000) and five
-delimiter-first (\\n\\n, \\n, legal markers) with max segment 2000.
-"""
+"""Ten chunking strategies: five length-first and five delimiter-first (max 2000 chars)."""
 
 from __future__ import annotations
 
@@ -403,5 +398,6 @@ def write_chunks_jsonl_from_df(
 
 
 def chroma_persist_dir(strategy_id: str) -> str:
-    """Persist path for Chroma for this strategy (under Data/)."""
-    return str(config.DATA_DIR / f"chroma_chunk_{strategy_id}")
+    from .eval.corpus_layout import STANDARD
+
+    return STANDARD.chroma_persist_dir_str(strategy_id)

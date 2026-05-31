@@ -12,10 +12,9 @@ from pathlib import Path
 from langchain_core.documents import Document
 from tqdm import tqdm
 
-from ... import config
 from ...chunking_strategies import CHUNK_STRATEGY_IDS
+from ..corpus_layout import CorpusLayout, STANDARD
 from ..retrieval_strategies import dedupe_preserve_order
-from ._shared import chunks_jsonl_path, neighbor_index_path
 
 
 @dataclass
@@ -35,13 +34,16 @@ class NeighborIndex:
         return lst[pos]
 
 
-def build_neighbor_index(strategy_id: str) -> NeighborIndex:
-    path = chunks_jsonl_path(strategy_id)
+def build_neighbor_index(
+    strategy_id: str, *, layout: CorpusLayout = STANDARD
+) -> NeighborIndex:
+    path = layout.chunks_jsonl_path(strategy_id)
     if not path.is_file():
         raise FileNotFoundError(f"Missing {path}")
     celex_to_uids: dict[str, list[str]] = defaultdict(list)
     with open(path, encoding="utf-8") as f:
-        for line in tqdm(f, desc=f"neighbor_index {strategy_id}", unit=" lines"):
+        desc = f"neighbor_index_{layout.name} {strategy_id}"
+        for line in tqdm(f, desc=desc, unit=" lines"):
             line = line.strip()
             if not line:
                 continue
@@ -64,8 +66,10 @@ def build_neighbor_index(strategy_id: str) -> NeighborIndex:
     )
 
 
-def save_neighbor_index(strategy_id: str, index: NeighborIndex) -> Path:
-    out = neighbor_index_path(strategy_id)
+def save_neighbor_index(
+    strategy_id: str, index: NeighborIndex, *, layout: CorpusLayout = STANDARD
+) -> Path:
+    out = layout.neighbor_index_path(strategy_id)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "wb") as f:
         pickle.dump(
@@ -81,11 +85,14 @@ def save_neighbor_index(strategy_id: str, index: NeighborIndex) -> Path:
     return out
 
 
-def load_neighbor_index(strategy_id: str) -> NeighborIndex:
-    out = neighbor_index_path(strategy_id)
+def load_neighbor_index(
+    strategy_id: str, *, layout: CorpusLayout = STANDARD
+) -> NeighborIndex:
+    out = layout.neighbor_index_path(strategy_id)
     if not out.is_file():
         raise FileNotFoundError(
-            f"Missing {out}. Run: python -m Scripts.eval.top10.neighbor_index --strategies {strategy_id}"
+            f"Missing {out}. Run: python -m Scripts.eval.top10.neighbor_index "
+            f"--strategies {strategy_id}"
         )
     with open(out, "rb") as f:
         data = pickle.load(f)

@@ -15,7 +15,7 @@ from tqdm import tqdm
 from langchain_core.documents import Document
 
 from ... import config
-from ...chunking_strategies import chroma_persist_dir
+from ..corpus_layout import CorpusLayout, STANDARD
 from ...embeddings_chromadb import load_vectorstore, release_chroma_process_cache
 from ..metrics import first_hit_rank
 from ..rerank_cross_encoder import unload_cross_encoder
@@ -47,6 +47,7 @@ def _maybe_empty_cuda_cache() -> None:
             import torch
 
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
         except Exception:
             pass
@@ -316,6 +317,7 @@ def run_checkpointed_eval(
     | None = None,
     prefetch_finalize: Callable[[dict, dict[str, Any], str, str], list[Document]] | None = None,
     no_resume_prefetch: bool = False,
+    layout: CorpusLayout = STANDARD,
 ) -> None:
     """
     For each pair, compute first_hit_rank lists; checkpoint after each query.
@@ -456,7 +458,7 @@ def run_checkpointed_eval(
     vs = None
     documents = None
     docs_loaded = False
-    # One context per mode per chunk strategy — rebuilding BM25 + token lists for every
+    # One RetrievalContext per mode per chunk strategy (avoid rebuilding BM25 each cell).
     # (chunk, retriever) cell duplicated ~1M token arrays and blew RSS on large corpora.
     ctx_full: RetrievalContext | None = None
     ctx_dense: RetrievalContext | None = None
@@ -468,7 +470,7 @@ def run_checkpointed_eval(
             _maybe_empty_cuda_cache()
 
         for cid, rid in pairs:
-            chunks_path = config.DATA_DIR / f"chunks_{cid}.jsonl"
+            chunks_path = layout.chunks_jsonl_path(cid)
             if stop_requested:
                 interrupted = True
                 break
@@ -508,7 +510,7 @@ def run_checkpointed_eval(
 
                 if not chunks_path.is_file():
                     raise FileNotFoundError(f"Missing {chunks_path}")
-                persist_dir = chroma_persist_dir(cid)
+                persist_dir = layout.chroma_persist_dir_str(cid)
                 if not (Path(persist_dir) / "chroma.sqlite3").is_file():
                     raise FileNotFoundError(f"Missing Chroma at {persist_dir}")
                 vs = load_vectorstore(persist_dir)

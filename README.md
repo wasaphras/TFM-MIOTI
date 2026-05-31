@@ -41,7 +41,7 @@ export HF_TOKEN=your_huggingface_token
 
 ### Step 1 -- Download the dataset
 
-Downloads MultiEURLEX and writes `Data/train.jsonl` (1 000 English documents). **Skips automatically** if the file already exists.
+Downloads MultiEURLEX and writes `Data/train.jsonl` (up to `DOC_LIMIT` English documents, default **55 000**). **Skips automatically** if the file already exists.
 
 ```bash
 python -m Scripts.data_extraction_load
@@ -262,7 +262,9 @@ This is **not** Steps 4–5. It uses a **smaller curated document list** (`Data/
    python -m Scripts.eval.ground_truth_generate_dedup
    ```
 
-3. Neighbor index for dedup eval 2 (**only strategies used in curated pairs**):
+3. Neighbor index for dedup eval 2 (strategies in curated pairs only):
+
+   ```bash
    python -m Scripts.eval.top10.neighbor_index_dedup --top10
    ```
 
@@ -308,13 +310,28 @@ python -m Scripts.eval.run_grid_eval \
     hyb_interleave hyb_fill_dense_then_bm25
 ```
 
-### Smoke test -- quick verification with tiny corpus
+### Smoke test (committed 10-doc fixture, 2 GT questions)
+
+The repo ships a small prebuilt corpus under [`tests/fixture/Data/`](tests/fixture/Data/) (tracked in git). It runs the same pipeline as production with **10 documents** and **2** ground-truth rows:
+
+- 200-row grid: 10 chunk strategies x 20 retrievers x 2 questions
+- Top-10 evals 1-4 (k=20)
+- Dedup eval1 + eval2 + merge
+- Ragas replay + judge (unless `--skip-ragas`)
 
 ```bash
-python -m Scripts.eval.build_chunk_indices --all --limit 10
-python -m Scripts.eval.ground_truth_generate --n 10
-python -m Scripts.eval.run_grid_eval --limit-queries 10 \
-  --retrievers dense_sim_k10 bm25_k10 hyb_rrf_k60
+# Rebuild fixture from full Data/ (needs Ollama + ../../Data/train.jsonl):
+# conda run -n Data --no-capture-output python tests/build_fixture.py
+
+bash tests/run_smoke_test.sh
+# bash tests/run_smoke_test.sh --full-grid  # 10 x 20 retrievers x 2 GT (slow on CPU rerank)
+# bash tests/run_smoke_test.sh --skip-ragas # omit Gemini/Ollama Ragas judge
+```
+
+Uses `TFM_DATA_DIR=tests/fixture/Data` and `TFM_CATEGORIES_JSON=Data/categories.json` by default. See [`tests/fixture/README.md`](tests/fixture/README.md) and [`docs/DELIVERY_CHECKLIST.md`](docs/DELIVERY_CHECKLIST.md).
+
+```bash
+python tests/validate_fixture.py   # 10 docs, Chroma ~2 MB each (not 15 GB)
 ```
 
 ---
@@ -435,7 +452,7 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `Data/eval_top10/`                      | Standard top-10 four-eval outputs + prefetch                  |
 | `Data/eval_top10_dedup/`                | Dedup top-10 eval (eval1/eval2) + prefetch + merges          |
 | `Data/eval/*.csv`                       | Grid eval outputs (written when a full grid finishes)           |
-| `Scripts/config.py`                     | Paths, model names, collection name, `DOC_LIMIT` (default 1000 docs) |
+| `Scripts/config.py`                     | Paths, model names, `DOC_LIMIT` (default 55000), `TFM_DATA_DIR` override |
 | `Scripts/data_extraction_load.py`       | HF download -> `train.jsonl`                                    |
 | `Scripts/preprocess.py`                 | Adds `labels_en` from categories                                |
 | `Scripts/chunking.py`                   | Single-strategy chunking for `main`/legacy                      |
@@ -456,7 +473,9 @@ If you change `--limit`, re-run chunk index build (Step 2), then regenerate `gro
 | `Scripts/eval/run_grid_eval.py`         | Full grid + CSV outputs                                         |
 | `Scripts/eval/llm_triad/`               | Rag replay + Ragas scoring (`generate_rag_responses`, `judge_rag_triad`) |
 
-**Clones and Git:** Heavy generated paths are listed in `.gitignore`—including **`Data/train*.jsonl`** (covers `train_dedup.jsonl`), **`Data/chunks_*.jsonl`** (covers `chunks_dedup_*`), **`Data/chroma_chunk_*/`** (covers dedup chroma dirs), **`Data/eval/`**, **`Data/eval_top10/`**, **`Data/eval_top10_dedup/`**, neighbor indices, prefetch trees, Ragas artefacts under those trees, etc. A fresh clone has the **scripts and small checked-in metadata** under `Data/`; run Steps **1–2** (and, for dedup, **Step 6** subset) locally before ground-truth generation or scoring.
+**Clones and Git:** Heavy paths under `Data/` are gitignored (`train*.jsonl`, `chunks_*.jsonl`, `chroma_chunk_*`, etc.). A fresh clone includes **scripts**, small metadata under `Data/`, committed **eval CSVs**, and the **smoke fixture** under `tests/fixture/Data/`. For full thesis runs, execute Steps **1–2** locally; use `bash tests/run_smoke_test.sh` to verify the stack without downloading the full corpus.
+
+**Reproducing committed thesis tables:** see [`docs/REPRODUCING_RESULTS.md`](docs/REPRODUCING_RESULTS.md).
 ---
 
 ## CLI entry points
@@ -619,6 +638,9 @@ Optional env: `RAG_CHUNK_STRATEGY`, `RAG_RETRIEVER`, `RAG_FINAL_K`, `RAG_CANDIDA
 
 | Variable                   | Used for                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `TFM_DATA_DIR`             | Override data root (default `<repo>/Data`; smoke test uses `tests/fixture/Data`)                  |
+| `TFM_CATEGORIES_JSON`      | Path to `categories.json` (default `<repo>/Data/categories.json`)                                 |
+| `TFM_DOC_LIMIT`            | Cap when sampling MultiEURLEX on first download (default `55000`)                                 |
 | `HF_TOKEN`                 | `huggingface_hub` download in `data_extraction_load`                                               |
 | `GEMINI_API_KEY`           | Loaded from project `.env`; **webapp chat API** + `judge_rag_triad` when `--provider` is gemini/auto |
 | `GEMINI_MODEL`             | Gemini chat for webapp + Ragas judge; default `gemini-2.0-flash` if unset |

@@ -68,11 +68,15 @@ def validate_gt_against_manifest(gt: list[dict], manifest_path: Path) -> None:
 
 
 def chunks_jsonl_path(strategy_id: str) -> Path:
-    return config.DATA_DIR / f"chunks_{strategy_id}.jsonl"
+    from ..corpus_layout import STANDARD
+
+    return STANDARD.chunks_jsonl_path(strategy_id)
 
 
 def neighbor_index_path(strategy_id: str) -> Path:
-    return config.DATA_DIR / "neighbor_index" / f"{strategy_id}.pkl"
+    from ..corpus_layout import STANDARD
+
+    return STANDARD.neighbor_index_path(strategy_id)
 
 
 def chunk_stats_path() -> Path:

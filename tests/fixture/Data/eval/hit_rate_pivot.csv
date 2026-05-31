@@ -1,0 +1,11 @@
+chunk_strategy,dense_sim_k10,bm25_k10,hyb_rrf_k60
+len_500_o50,0.0,0.5,0.0
+len_1000_o100,0.0,1.0,0.5
+len_1500_o150,0.5,1.0,0.5
+len_2000_o0,0.5,1.0,0.5
+len_2000_o200,0.5,1.0,0.5
+para_nn_merge,0.5,1.0,0.5
+line_n_merge,0.5,1.0,0.5
+char_nn_only,0.5,1.0,0.5
+rec_nn_priority,0.5,1.0,0.5
+rec_legal_markers,0.5,1.0,0.5

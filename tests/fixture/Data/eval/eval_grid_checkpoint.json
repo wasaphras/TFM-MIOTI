@@ -1,0 +1,208 @@
+{
+  "completed": {
+    "char_nn_only::bm25_k10": {
+      "ranks": [
+        8,
+        5
+      ]
+    },
+    "char_nn_only::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "char_nn_only::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "len_1000_o100::bm25_k10": {
+      "ranks": [
+        8,
+        5
+      ]
+    },
+    "len_1000_o100::dense_sim_k10": {
+      "ranks": [
+        null,
+        null
+      ]
+    },
+    "len_1000_o100::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        4
+      ]
+    },
+    "len_1500_o150::bm25_k10": {
+      "ranks": [
+        8,
+        4
+      ]
+    },
+    "len_1500_o150::dense_sim_k10": {
+      "ranks": [
+        null,
+        4
+      ]
+    },
+    "len_1500_o150::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        3
+      ]
+    },
+    "len_2000_o0::bm25_k10": {
+      "ranks": [
+        8,
+        4
+      ]
+    },
+    "len_2000_o0::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "len_2000_o0::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "len_2000_o200::bm25_k10": {
+      "ranks": [
+        8,
+        5
+      ]
+    },
+    "len_2000_o200::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "len_2000_o200::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "len_500_o50::bm25_k10": {
+      "ranks": [
+        8,
+        null
+      ]
+    },
+    "len_500_o50::dense_sim_k10": {
+      "ranks": [
+        null,
+        null
+      ]
+    },
+    "len_500_o50::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        null
+      ]
+    },
+    "line_n_merge::bm25_k10": {
+      "ranks": [
+        8,
+        4
+      ]
+    },
+    "line_n_merge::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "line_n_merge::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "para_nn_merge::bm25_k10": {
+      "ranks": [
+        8,
+        4
+      ]
+    },
+    "para_nn_merge::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "para_nn_merge::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "rec_legal_markers::bm25_k10": {
+      "ranks": [
+        5,
+        6
+      ]
+    },
+    "rec_legal_markers::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "rec_legal_markers::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        3
+      ]
+    },
+    "rec_nn_priority::bm25_k10": {
+      "ranks": [
+        8,
+        5
+      ]
+    },
+    "rec_nn_priority::dense_sim_k10": {
+      "ranks": [
+        null,
+        1
+      ]
+    },
+    "rec_nn_priority::hyb_rrf_k60": {
+      "ranks": [
+        null,
+        1
+      ]
+    }
+  },
+  "meta": {
+    "chunk_strategies": [
+      "len_500_o50",
+      "len_1000_o100",
+      "len_1500_o150",
+      "len_2000_o0",
+      "len_2000_o200",
+      "para_nn_merge",
+      "line_n_merge",
+      "char_nn_only",
+      "rec_nn_priority",
+      "rec_legal_markers"
+    ],
+    "ground_truth": "/home/mwc/Documents/MIOTI/Current/TFM/tests/fixture/Data/ground_truth.jsonl",
+    "ground_truth_sha256": "896ac5e254d5632c8edb1a6933ffa5a847c800002709cc3ff1db00ba35e91c0b",
+    "limit_queries": 2,
+    "retrievers": [
+      "dense_sim_k10",
+      "bm25_k10",
+      "hyb_rrf_k60"
+    ],
+    "version": 2
+  },
+  "partial": null
+}
