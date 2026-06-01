@@ -677,6 +677,21 @@ Optional env: `RAG_CHUNK_STRATEGY`, `RAG_RETRIEVER`, `RAG_FINAL_K`, `RAG_CANDIDA
 
 ---
 
+## Secrets (API keys and tokens)
+
+**Never commit secrets.** Copy [`.env.example`](.env.example) to `.env` at the project root and fill in values; `.env` is gitignored. Python scripts load it via [`Scripts/config.py`](Scripts/config.py).
+
+| Secret | Where to set | Rotate if… |
+| ------ | ------------ | ---------- |
+| `HF_TOKEN` | Root `.env` | Token was ever pasted into a notebook, log, or chat; or shared publicly. Revoke at [Hugging Face → Access Tokens](https://huggingface.co/settings/tokens) and create a new read token. |
+| `GEMINI_API_KEY` | Root `.env` | Key may have leaked from backups or shared machines. Regenerate at [Google AI Studio](https://aistudio.google.com/apikey). |
+
+**Jupyter notebooks:** do **not** hardcode `HF_TOKEN` or `GEMINI_API_KEY` in [`.ipynb`](TFM.ipynb) cells — use `load_dotenv()` and `os.environ` (same as the pipeline). The webapp never sees Gemini keys; only the FastAPI backend reads root `.env`.
+
+**Pre-commit:** install hooks with `pip install pre-commit && pre-commit install` so [gitleaks](https://github.com/gitleaks/gitleaks) blocks common secret patterns before push.
+
+---
+
 ## Environment variables
 
 

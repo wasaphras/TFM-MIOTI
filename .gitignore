@@ -13,6 +13,8 @@ env/
 .env
 .env.*
 !.env.example
+# Local git-filter-repo replacement maps (never commit)
+replacements.txt
 
 # Jupyter
 .ipynb_checkpoints/
